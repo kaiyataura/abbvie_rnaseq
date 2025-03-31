@@ -1,0 +1,438 @@
+### Setup
+
+```{r}
+library(tidyverse)
+library(Seurat)
+library(SingleR)
+library(RColorBrewer)
+library(reshape2)
+
+.no_load <- F # set to TRUE if you want to re-run everything without loading saves (will take forever)
+# or load everything with data/workspace_prelim.RData
+```
+
+### Data
+
+```{r}
+# only run if plotting QC plots
+data <- readRDS("../data/PMED_explant_comb_seurat.Rds")
+data@meta.data <- data@meta.data %>% .[colnames(.) != "experiment"]
+data$sample <- Idents(data)
+data$experiment <- factor(c("Cellmix_NT_CD45pos", 
+                            "Cellmix_NT_CD45neg", 
+                            "Cellmix_T_CD45pos",
+                            "Cellmix_T_CD45neg", 
+                            "Explant_NT_CD45pos", 
+                            "Explant_T_CD45neg")[data$sample])
+
+data$treatment <- factor(c("NT", 
+                           "NT", 
+                           "T",
+                           "T", 
+                           "NT", 
+                           "T")[data$sample])
+
+cellmix_samples <- c("1", "2", "3", "4")
+explant_samples <- c("5", "6")
+raw_cellmix <- data[,data$orig.ident %in% cellmix_samples]
+raw_explant <- data[,data$orig.ident %in% explant_samples]
+
+# 1: Cellmix CD45+ NT
+# 2: Cellmix CD45- NT
+# 3: Cellmix CD45+ T
+# 4: Cellmix CD45- T
+# 5: Explant NT
+# 6: Explant T
+```
+
+### QC
+
+```{r fig.width=12}
+VlnPlot(raw_cellmix, features=c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3) +
+  geom_hline(yintercept=6, color="blue")
+FeatureScatter(raw_cellmix, feature1 = "nCount_RNA", feature2 = "percent.mt") +
+FeatureScatter(raw_cellmix, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+VlnPlot(raw_explant, features=c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3) +
+  geom_hline(yintercept=8, color="red") +
+  geom_hline(yintercept=10, color="blue")
+
+FeatureScatter(raw_explant, feature1 = "nCount_RNA", feature2 = "percent.mt", ) +
+FeatureScatter(raw_explant, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+# Split by singlets vs doublets
+Idents(raw_cellmix) <- factor(paste(raw_cellmix$orig.ident, raw_cellmix$dbl.class, sep='-'))
+VlnPlot(raw_cellmix, features=c('nFeature_RNA', 'nCount_RNA', 'percent.mt'))
+
+Idents(raw_explant) <- factor(paste(raw_explant$orig.ident, raw_explant$dbl.class, sep='-'))
+VlnPlot(raw_explant, features=c('nFeature_RNA', 'nCount_RNA', 'percent.mt'))
+```
+
+### Filtering
+
+```{r}
+if (.no_load) {
+  # re-run everything
+  cellmix <- subset(cellmix, subset=(((sample %in% c(1, 3)) & nFeature_RNA > 500 & nFeature_RNA < 4000) |
+                                      ((sample %in% c(2, 4)) & nFeature_RNA > 5000 & nFeature_RNA < 9000)) & 
+                                     percent.mt < 6)
+  explant <- subset(explant, subset=nFeature_RNA > 500 & nFeature_RNA < 4000 & percent.mt < 10)
+  
+  explant$dbl.class <- ifelse(explant$dbl.score > 0.9, "doublet", "singlet")
+  cellmix <- subset(cellmix, subset=dbl.class == 'singlet')
+  explant <- subset(explant, subset=dbl.class == 'singlet')
+} else {
+  # load saves
+  cellmix <- readRDS("../data/filtered_cellmix.Rds")
+  explant <- readRDS("../data/filtered_explant.Rds")
+}
+```
+
+### Normalization
+
+```{r}
+if (.no_load) {
+  # will actually take forever
+  cellmix <- SCTransform(cellmix, vars.to.regress="percent.mt")
+  explant <- SCTransform(explant, vars.to.regress="percent.mt")
+}
+```
+
+### Clustering
+
+```{r}
+if (.no_load) {
+  # will take forever
+  cellmix <- RunPCA(cellmix)
+  cellmix <- FindNeighbors(cellmix, dims=1:30)
+  cellmix <- FindClusters(cellmix, resolution=0.5)
+  cellmix <- RunUMAP(cellmix, dims=1:30)
+  
+  explant <- RunPCA(explant)
+  explant <- FindNeighbors(explant, dims=1:30)
+  explant <- FindClusters(explant, resolution=0.5)
+  explant <- RunUMAP(explant, dims=1:30)
+  
+  # saveRDS(cellmix, "../data/filtered_cellmix.Rds")
+  # saveRDS(explant, "../data/filtered_explant.Rds")
+  # saveRDS(cellmix, "../data/cellmix.Rds")
+  # saveRDS(explant, "../data/explant.Rds")
+}
+```
+
+```{r fig.height=8, fig.width=8}
+DimPlot(cellmix, label=T) + NoLegend() + theme(text = element_text(size = 20))
+DimPlot(explant, label=T) + NoLegend() + theme(text = element_text(size = 20))
+
+DimPlot(cellmix, group.by='dbl.class') + theme(text = element_text(size = 20))
+DimPlot(explant, group.by='dbl.class') + theme(text = element_text(size = 20))
+
+DimPlot(cellmix, group.by='experiment') + theme(text = element_text(size = 20))
+DimPlot(explant, group.by='experiment') + theme(text = element_text(size = 20))
+```
+
+```{r fig.height=12, fig.width=20}
+markers <- c("PTPRC", "CD3D", "CD4", "CD8A", "CD19", "CD68", "S100A9", "GNLY", "NKG7", "FCER1A", "CST3", "COL1A1", "THY1")
+VlnPlot(cellmix, features = markers, pt.size = 0.2, ncol = 5)
+VlnPlot(explant, features = markers, pt.size = 0.2, ncol = 5)
+FeaturePlot(cellmix, features = markers, pt.size = 0.2, ncol = 5)
+FeaturePlot(explant, features = markers, pt.size = 0.2, ncol = 5)
+DoHeatmap(cellmix, features = markers)
+DoHeatmap(explant, features = markers)
+
+cancer_markers <- c("Epcam", "CDH1", "CDH2", "KRT5", "KRT6A", "KRT7", "KRT8", "KRT18", "CLDN17", "VSTM1", "ADGRF2", "UPK1B")
+VlnPlot(cellmix, features = cancer_markers, pt.size = 0.2, ncol = 5)
+VlnPlot(explant, features = cancer_markers, pt.size = 0.2, ncol = 5)
+FeaturePlot(cellmix, features = cancer_markers, pt.size = 0.2, ncol = 5)
+FeaturePlot(explant, features = cancer_markers, pt.size = 0.2, ncol = 5)
+DoHeatmap(cellmix, features = cancer_markers)
+DoHeatmap(explant, features = cancer_markers)
+```
+
+### SingleR
+
+```{r fig.height=12, fig.width=18}
+if (.no_load) { 
+  # re-run SingleR cell-type annotation
+  ref <- celldex::BlueprintEncodeData()
+  
+  cellmix.pred <- SingleR(test=LayerData(cellmix), ref=ref, de.method="wilcox", labels=ref$label.fine)
+  cellmix$singler <- cellmix.pred$labels
+  plotScoreHeatmap(cellmix.pred)
+  plotDeltaDistribution(cellmix.pred, ncol=8, dots.on.top=FALSE)
+  
+  explant.pred <- SingleR(test=LayerData(explant), ref=ref, de.method="wilcox", labels=ref$label.fine)
+  explant$singler <- explant.pred$labels
+  plotScoreHeatmap(explant.pred)
+  plotDeltaDistribution(explant.pred, ncol=8, dots.on.top=FALSE)
+  
+  
+  cellmix.ids <- table(assigned=cellmix.pred$labels, cluster=cellmix$seurat_clusters) %>% as.matrix() %>%
+    apply(., 1, function(x) x / table(cellmix$seurat_clusters)) %>% 
+    t() %>%
+    apply(., 2, function(x) rownames(.)[order(x, decreasing=T)[sort(x, decreasing=T) > 0.2]]) %>%
+    lapply(., function(x) paste(x, collapse=" + ")) %>%
+    as.character()
+  cellmix.ids[cellmix.ids == ''] <- 'Mixed'
+  cellmix.ids[15] <- "Likely Tumor Cells"
+  cellmix$singler_clusters <- data.frame(cellmix.ids[cellmix$seurat_clusters], row.names=colnames(cellmix))
+  
+  explant.ids <- table(assigned=explant.pred$labels, cluster=explant$seurat_clusters) %>% as.matrix() %>%
+    apply(., 1, function(x) x / table(explant$seurat_clusters)) %>% 
+    t() %>%
+    apply(., 2, function(x) rownames(.)[order(x, decreasing=T)[sort(x, decreasing=T) > 0.2]]) %>%
+    lapply(., function(x) paste(x, collapse=" + ")) %>%
+    as.character()
+  explant.ids[explant.ids == ''] <- 'Mixed'
+  explant$singler_clusters <- data.frame(explant.ids[explant$seurat_clusters], row.names=colnames(explant))
+}
+
+DimPlot(cellmix, group.by="singler") + guides(color=guide_legend(ncol=1, override.aes=aes(size=5)))
+DimPlot(explant, group.by="singler") + guides(color=guide_legend(ncol=1, override.aes=aes(size=5)))
+
+DimPlot(cellmix, group.by="singler_clusters", label=T, label.size=8, repel=T)
+DimPlot(explant, group.by="singler_clusters", label=T, label.size=8, repel=T)
+
+DimPlot(cellmix, group.by="singler_clusters", split.by='experiment', ncol=2) + theme(text = element_text(size = 20), legend.text = element_text(size=15))
+DimPlot(explant, group.by="singler_clusters", split.by='experiment', ncol=1) + theme(text = element_text(size = 20), legend.text = element_text(size=15))
+```
+
+### Manual Annotation
+
+```{r fig.width=20, fig.height=20}
+if (.no_load) {
+  # ignore this mess
+  manual_cellmix.ids <- c(`0`="CD4 T cells",
+                          `1`="CD4 T cells",
+                          `2`="Fibroblasts 1",
+                          `3`="CD4 T cells",
+                          `4`="CD8 T cells",
+                          `5`="Fibroblasts 2",
+                          `6`="CD8 T cells",
+                          `7`="B cells",
+                          `8`="CD4 T cells",
+                          `9`="NK cells",
+                          `10`="Monocytes / Myeloid",
+                          `11`="CD4 T cells",
+                          `12`="NK cells",
+                          `13`="CD4 T cells",
+                          `14`="Tumor",
+                          `15`="Other T cells",
+                          `16`="NKT cells",
+                          `17`="CD4 T cells",
+                          `18`="Doublets")
+  cellmix$manual_clusters <- data.frame(manual_cellmix.ids[cellmix$seurat_clusters], row.names=colnames(cellmix))
+  
+  manual_explant.ids <- data.frame(broad=c("CD4 T cells","CD4 T cells","Mast cells / Granulocytes","NK cells","CD8 T cells","CD8 T cells","NK cells","Tumor","Fibroblasts","NK cells","CD4 T cells","B cells","Monocyte","Neutrophils","Monocyte","Smooth muscle / Other stromal"),
+                               fine=c("CD4 Tcm","CD4 Treg","Mast cells / Granulocytes","NK cells","CD8 T eff","CD8 Texh","NK cells","Tumor","Fibroblasts","NK cells","CD4 MAIT T cells","B cells","Monocyte classical","Neutrophils","Monocyte non-classical","Smooth muscle / Other stromal"),
+                               row.names=levels(Idents(explant)))
+  
+  explant$manual_clusters.broad <- manual_explant.ids$broad[explant$seurat_clusters]
+  explant$manual_clusters.fine <- manual_explant.ids$fine[explant$seurat_clusters]
+}
+DimPlot(cellmix, group.by="manual_clusters", label=T, label.size=8, repel=T)
+DimPlot(explant, group.by="manual_clusters.broad", label=T, label.size=8, repel=T)
+DimPlot(explant, group.by="manual_clusters.fine", label=T, label.size=8, repel=T)
+```
+
+### Composition
+
+```{r fig.height=10, fig.width=18}
+# cell type proportions
+cellmix@meta.data[,c("singler_clusters", "experiment")] %>% 
+  table() %>% 
+  prop.table(margin=2) %>%
+  as.data.frame.matrix()
+
+explant@meta.data[,c("singler_clusters", "experiment")] %>% 
+  table() %>% 
+  prop.table(margin=2) %>%
+  as.data.frame.matrix()
+
+
+# cell type vs experiment plots
+(cellmix@meta.data %>%
+  ggplot(aes(fill=singler_clusters, x=experiment))) +
+  geom_bar(position="fill") + 
+  scale_fill_manual(values=colorRampPalette(brewer.pal(12, "Set3"))(length(unique(cellmix$singler_clusters)))) +
+  theme_bw(base_size=15) +
+  labs(title="Cell-Type Composition of Cellmix Samples", x="Experiment", y="Composition")
+
+(explant@meta.data[,c("experiment", "singler_clusters")] %>%
+  ggplot(aes(fill=singler_clusters, x=experiment))) +
+  geom_bar(position="fill") + 
+  scale_fill_manual(values=colorRampPalette(brewer.pal(12, "Set3"))(length(unique(explant$singler_clusters)))) +
+  theme_bw(base_size=15) +
+  labs(title="Cell-Type Composition of Explant Samples", x="Experiment", y="Composition")
+
+
+# singler vs singler_clusters plots
+(cellmix@meta.data[,c("singler_clusters", "singler")] %>% 
+  ggplot(aes(fill=singler, x=singler_clusters))) +
+  geom_bar(position="fill") + 
+  guides(fill=guide_legend(ncol=2)) +
+  scale_fill_manual(values=colorRampPalette(brewer.pal(12, "Set3"))(length(unique(cellmix$singler)))) +
+  theme_bw(base_size=15) +
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=15)) +
+  labs(title="Cell-Type Composition of Cellmix Clusters", x="Cluster", y="Composition")
+
+(explant@meta.data[,c("singler_clusters", "singler")] %>%
+  ggplot(aes(fill=singler, x=singler_clusters))) +
+  geom_bar(position="fill") + 
+  guides(fill=guide_legend(ncol=2)) +
+  scale_fill_manual(values=colorRampPalette(brewer.pal(12, "Set3"))(length(unique(explant$singler)))) +
+  theme_bw(base_size=15) +
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=15)) +
+  labs(title="Cell-Type Composition of Explant Clusters", x="Cluster", y="Composition")
+
+
+# singler vs seurat_clusters plots
+(cellmix@meta.data[,c("seurat_clusters", "singler")] %>%
+  ggplot(aes(fill=singler, x=seurat_clusters))) +
+  geom_bar(position="fill") + 
+  guides(fill=guide_legend(ncol=2)) +
+  scale_fill_manual(values=colorRampPalette(brewer.pal(12, "Set3"))(length(unique(cellmix$singler)))) +
+  theme_bw(base_size=15) +
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=15)) +
+  labs(title="Cell-Type Composition of Cellmix Clusters", x="Cluster", y="Composition")
+
+(explant@meta.data[,c("seurat_clusters", "singler")] %>%
+  ggplot(aes(fill=singler, x=seurat_clusters))) +
+  geom_bar(position="fill") + 
+  guides(fill=guide_legend(ncol=2)) +
+  scale_fill_manual(values=colorRampPalette(brewer.pal(12, "Set3"))(length(unique(explant$singler)))) +
+  theme_bw(base_size=15) +
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1, size=15)) +
+  labs(title="Cell-Type Composition of Explant Clusters", x="Cluster", y="Composition")
+```
+
+### Marker Detection
+
+```{r}
+if (.no_load) {
+  cellmix.markers <- FindAllMarkers(cellmix)
+  # saveRDS(cellmix.markers, "../data/cellmix_markers.Rds")
+  
+  explant.markers <- FindAllMarkers(explant)
+  # saveRDS(explant.markers, "../data/explant_markers.Rds")
+  
+  combined_cellmix <- cellmix
+  Idents(combined_cellmix) <- cellmix$singler_clusters
+  combined_cellmix.markers <- FindAllMarkers(combined_cellmix)
+  # saveRDS(combined_cellmix.markers, "../data/combined_cellmix_markers.Rds")
+  
+  combined_explant <- explant
+  Idents(combined_explant) <- explant$singler_clusters
+  combined_explant.markers <- FindAllMarkers(combined_explant)
+  # saveRDS(combined_explant.markers, "../data/combined_explant_markers.Rds")
+  
+  manual_cellmix <- cellmix
+  Idents(manual_cellmix) <- cellmix$manual_clusters
+  manual_cellmix.markers <- FindAllMarkers(manual_cellmix)
+  # saveRDS(manual_cellmix.markers, "../data/manual_cellmix_markers.Rds")
+  
+  manual_explant <- explant
+  Idents(manual_explant) <- explant$manual_clusters.fine
+  manual_explant.markers <- FindAllMarkers(manual_explant)
+  # saveRDS(manual_explant.markers, "../data/manual_explant_markers.Rds")
+} else {
+  cellmix.markers <- readRDS("../data/cellmix_markers.Rds")
+  combined_cellmix.markers <- readRDS("../data/combined_cellmix_markers.Rds")
+  manual_cellmix.markers <- readRDS("../data/manual_cellmix_markers.Rds")
+  explant.markers <- readRDS("../data/explant_markers.Rds")
+  combined_explant.markers <- readRDS("../data/combined_explant_markers.Rds")
+  manual_explant.markers <- readRDS("../data/manual_explant_markers.Rds")
+}
+```
+
+```{r fig.height=15, fig.width=20}
+
+# note: orders for clusters will probably be messed up
+
+# seurat cluster marker heatmaps
+DoHeatmap(cellmix, features=(cellmix.markers %>%
+                              group_by(cluster) %>%
+                              dplyr::filter(avg_log2FC > 1) %>%
+                              slice_head(n = 10) %>%
+                              ungroup() %>%
+                              `$`("gene"))) + NoLegend()
+
+DoHeatmap(explant, features=(explant.markers %>%
+                              group_by(cluster) %>%
+                              dplyr::filter(avg_log2FC > 1) %>%
+                              slice_head(n = 10) %>%
+                              ungroup() %>%
+                              `$`("gene"))) + NoLegend()
+
+
+# singler cluster marker heatmaps
+DoHeatmap(cellmix,
+          group.by="singler_clusters",
+          features=(combined_cellmix.markers %>%
+                              group_by(cluster) %>%
+                              dplyr::filter(avg_log2FC > 1) %>%
+                              slice_head(n = 4) %>%
+                              ungroup() %>%
+                              `$`("gene")), 
+          angle=-45, hjust=1) + 
+  theme(axis.text.y=element_text(size=20)) + 
+  NoLegend()
+
+DoHeatmap(explant,
+          group.by="singler_clusters",
+          features=(combined_explant.markers %>%
+                              group_by(cluster) %>%
+                              dplyr::filter(avg_log2FC > 1) %>%
+                              slice_head(n = 4) %>%
+                              ungroup() %>%
+                              `$`("gene")), 
+          angle=-45, hjust=1) + 
+  theme(axis.text.y=element_text(size=20)) + 
+  NoLegend()
+
+
+# manual cluster marker heatmaps
+DoHeatmap(cellmix,
+          group.by="manual_clusters",
+          features=(manual_cellmix.markers %>%
+                              group_by(cluster) %>%
+                              dplyr::filter(avg_log2FC > 1) %>%
+                              slice_head(n = 4) %>%
+                              ungroup() %>%
+                              `$`("gene")), 
+          angle=-45, hjust=1) + 
+  theme(axis.text.y=element_text(size=20)) + 
+  NoLegend()
+
+DoHeatmap(explant,
+          group.by="manual_clusters.fine",
+          features=(manual_explant.markers %>%
+                              group_by(cluster) %>%
+                              dplyr::filter(avg_log2FC > 1) %>%
+                              slice_head(n = 4) %>%
+                              ungroup() %>%
+                              `$`("gene")), 
+          angle=-45, hjust=1) + 
+  theme(axis.text.y=element_text(size=20)) + 
+  NoLegend()
+
+
+# show top 10 markers
+cellmix.markers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 1) %>%
+  slice_head(n = 10) %>%
+  .[,c("cluster","gene")] %>%
+  group_by(cluster) %>%
+  summarize(genes=paste(gene, collapse = ", ")) %>%
+  column_to_rownames(var="cluster") %>% View()
+
+explant.markers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 1) %>%
+  slice_head(n = 10) %>%
+  .[,c("cluster","gene")] %>%
+  group_by(cluster) %>%
+  summarize(genes=paste(gene, collapse = ", ")) %>%
+  column_to_rownames(var="cluster") %>% View()
+```

@@ -1,0 +1,179 @@
+---
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+2024-05-22 Tumor explants (PMED) RNAseq Analysis from counts
+(protein-coding genes only)
+
+############ SET UP
+
+```{r}
+library(edgeR) # You will need to install these packages the first time
+library(limma)
+
+# input.dir <- ("/Users/taurakx/Desktop/Practice/Exercise_explant_data.Rmd")
+# setwd(input.dir)
+```
+
+#### 1) Examine the data
+
+```{r}
+rna_counts <- read.csv("rna_counts.csv", row.names=1)
+sample_meta <- read.csv("sample_metadata.csv", row.names=1)
+gene_features <- read.csv("genefeature_data.csv", row.names=1)
+```
+
+Exercise questions: Can you write some code to tell how many samples and
+how many genes there are in this data? (Hint: they correspond to number
+of columns/ rows of some of the tables)
+
+```{r}
+nrow(rna_counts) # num genes
+ncol(rna_counts) # num samples
+```
+
+Can you use "str" function to make a quick summary of all 3 tables given
+above?
+
+```{r}
+str(gene_features)
+str(rna_counts)
+str(sample_meta)
+```
+
+Can you check if the rownames of sample_meta and colnames of rna_counts
+are exactly the same?
+
+```{r}
+all(colnames(rna_counts) == rownames(sample_meta))
+```
+
+Can you check if the rownames of rna_counts are exactly the same as
+"ensembl_gene_id" column in gene_features?
+
+```{r}
+all(rownames(rna_counts) == gene_features$ensembl_gene_id)
+```
+
+in sample_meta, can you subset out only the samples where indication =
+"CRC" (and save it as another dataframe)?
+
+```{r}
+CRC_sample_meta <- sample_meta[sample_meta$indication == "CRC",]
+```
+
+in sample_meta, can you subset out only the samples where indication =
+"CRC" OR "HNSCC"?
+
+```{r}
+sample_meta[sample_meta$indication %in% c("CRC", "HNSCC"),]
+```
+
+in sample_meta, can you subset out only the samples where indication =
+"CRC" OR "HNSCC" OR "BLCA" OR "RCC"?
+
+```{r}
+sample_meta[sample_meta$indication %in% c("CRC", "HNSCC", "BLCA", "RCC"),]
+```
+
+in sample_meta, can you extract out the row with rowname
+"X7465.DA.0086"?
+
+```{r}
+sample_meta["X7465.DA.0086",]
+```
+
+in sample_meta, can you subset out the column with colname "indication"?
+
+```{r}
+sample_meta[,"indication"]
+```
+
+in the gene_features table, can you extract out the row with ensembl_id
+= "ENSG00000002586"?
+
+```{r}
+gene_features[gene_features$ensembl_gene_id == "ENSG00000002586",]
+```
+
+in rna_counts, can you extract out the rows (genes) which have values \>
+1000 for the sample X7465.DA.0012?
+
+```{r}
+rna_counts[rna_counts$X7465.DA.0012 > 1000,]
+```
+
+what is the data type of 1) sample_meta's "indication" column 2)
+gene_features' "" column and 3) rna counts' "X7465.DA.0086" column?
+
+```{r}
+class(sample_meta$indication)
+class(rna_counts$X7465.DA.0086)
+```
+
+Can you convert sample_meta's "indication" column into the data type
+factor?
+
+```{r}
+as.factor(sample_meta$indication)
+```
+
+Can you convert it back to what it was originally?
+
+```{r}
+as.vector(factor(sample_meta$indication))
+```
+
+In sample_meta, can you tally up how many samples we have for each
+indication? (hint: use the built-in "table" function)
+
+```{r}
+table(sample_meta$indication)
+```
+
+#### 2) Make DGE list object and include sample/ gene feature info
+
+```{r}
+y <- DGEList(rna_counts, samples = sample_meta, genes = gene_features)
+```
+
+Let's play around with this object, y, a little: Questions: Can you see
+what slots are stored in y?
+
+```{r}
+names(y)
+```
+
+Can you print out the first 6 rows of "samples" information in y?
+
+```{r}
+y$samples[1:6,]
+```
+
+Can you write some code to print out just the library sizes in y?
+
+```{r}
+print(y$samples$lib.size)
+```
+
+Can you calculate 1) the sum of library sizes of all samples 2) the mean
+library size?
+
+```{r}
+sum(y$samples$lib.size)
+mean(y$samples$lib.size)
+```
+
+Can you make a barplot of library sizes for all the samples?
+
+```{r}
+barplot(y$samples$lib.size, main = "Sample Library Sizes", ylab = "Library Size")
+```
+
+Do you notice any potentially problematic samples?
+
+```{r}
+y$samples[1,] # library size is low for sample 1
+```

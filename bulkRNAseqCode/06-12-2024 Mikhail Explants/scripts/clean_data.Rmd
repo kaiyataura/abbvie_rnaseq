@@ -1,0 +1,187 @@
+### Setup
+
+```{r}
+library(readxl)
+library(janitor)
+library(readr)
+library(biomaRt)
+library(matrixStats)
+library(Biobase)
+library(tidyverse)
+```
+
+### Data
+
+```{r}
+raw_samples <- read_excel('../raw/2024 Master Sheet Draft_ DATA cutoff 06102024.xlsx',
+                  col_names=F)
+data_samples <- data.frame(raw_samples)
+colnames(data_samples) <- data_samples[2,]
+rownames(data_samples) <- data_samples[,2]
+data_samples <- data_samples[c(-1,-2),3:34]
+data_samples$`Estimated Delivery Date` <- 
+  data_samples$`Estimated Delivery Date` %>% 
+  convert_to_date() %>%
+  format(format='%m-%d-%Y')
+```
+
+```{r}
+raw_batch_1 <- read_excel('../raw/Admera_23012-02-80+Initial+QC+Report.xlsx')
+data_batch_1 <- data.frame(raw_batch_1[,-1], Batch=1)
+
+raw_batch_2 <- read_excel('../raw/Admera_23012-03-62+Initial+QC+Report.xlsx')
+data_batch_2 <- data.frame(raw_batch_2[,-1], Batch=2)
+
+# raw_batch_3 <- read_excel('../raw/Admera_23012-04-92+Initial+QC+Report.xlsx')
+# data_batch_3 <- data.frame(raw_batch_3[,-1], Batch=3)
+
+colnames(data_batch_2) <- colnames(data_batch_1)
+# colnames(data_batch_3) <- colnames(data_batch_1)
+data_batch <- rbind(data_batch_1, data_batch_2)
+```
+
+```{r}
+data <- merge(data_samples, data_batch, 
+              by.x='Pmed Path #', by.y='Customer.Sample.ID',
+              all=T) %>%
+        clean_names() %>%
+        rename(dv200_percent_of_total=dv200_of_total) %>%
+        mutate(vendor_path_report=case_match(vendor_path_report,
+                                             'Y' ~ T,
+                                             'N' ~ F),
+               supp_tissue=case_match(supp_tissue,
+                                      'YES' ~ T,
+                                      'NO' ~ F),
+               ffpe=case_match(ffpe,
+                              'YES' ~ T,
+                              'NO' ~ F),
+               cryopreserved=case_match(cryopreserved,
+                              'YES' ~ T,
+                              'NO' ~ F),
+               reduced_location=case_when(
+                          location %in% c('Larynx', 'Nasopharynx', 'Oropharynx', 'Oral Cavity') ~ 'Head/Neck',
+                          location %in% c('Colon', 'Colon/Rectum') ~ 'Colon/Rectum',
+                          location %in% c('Lung', 'Lung & Bronchus') ~ 'Lung/Bronchus',
+                          TRUE ~ location))
+
+data[data == 'NA' | 
+     data == 'na' | 
+     data == 'N/A' | 
+     data == '.' | 
+     data == '-' | 
+     data == 'Unknown' |
+     data == 'unassigned'] <- NA
+
+# Col 1: pmed_path_number - Sample number
+# Col 2: tumor_id - Sample ID
+# Col 3: vendor_path_report - ?
+# Col 4: service_provider - Sample provider
+# Col 5: subsidiary - Subsidary of sample provider
+# Col 6: process_location - Sample processed in (vendor or ABA)
+# Col 7: tprs - ?
+# Col 8: location - Cancer location
+# Col 9: diagnosis - Cancer indication
+# Col 10: estimated_delivery_date - Date sample delivered
+# Col 11: year - Year sample delivered
+# Col 12: vials_available - Number of vials of cancer samples available
+# Col 13: age_years - Patient age in years
+# Col 14: sex - Patient sex
+# Col 15: ethnicity - Patient ethnicity
+# Col 16: primary_mets_nat - ?
+# Col 17: supp_tissue - If there exists supplemental tissue ?
+# Col 18: supp_tissue_type - Type of supplemental tissue
+# Col 19: additional_information - Location of sample
+# Col 20: lunit - AI-based tissue biomarker analysis ?
+# Col 21: rna - Sample was RNA sequenced ?
+# Col 22: path_report - Path report exists ?
+# Col 23: ffpe - Sample preserved in FFPE (Formalin Fixed Paraffin Embedded) block
+# Col 24: ffpe_weight_gram - Weight of FFPE block with sample
+# Col 25: current_holder - Sample currently located in ?
+# Col 26: cryopreserved - Sample frozen for preservation
+# Col 27: vials - Number of vials of samples ?
+# Col 28: available_vials - Number of unused sample vials ?
+# Col 29: original_weight - Original weight of ?
+# Col 30: box_number - Which box the sample was stored in ?
+# Col 31: box_position - Where the box is stored in ?
+# Col 32: sample_coments - Additonal comments of samples
+# Col 33: admera_health_sample_id - Admera internal sample ID
+# Col 34: sample_type - Type of sample (all RNA)
+# Col 35: sample_volume_ul - Volume of sample tested
+# Col 36: concentration_ng_ul - Concentration of sample in ng/uL
+# Col 37: total_quantity_ng - Quantity of sample in ng
+# Col 38: rin - RNA quality score on a scale of 1-10 (RNA Integrity Number) 
+# Col 39: dv200_percent_of_total - RNA quality score (% RNA frag > 200 nucleotides)
+# Col 40: batch - Admera batch number (1 or 2)
+```
+
+```{r}
+tpm_batch_1 <- read_tsv('../raw/Batch1_240521_human_tumor_explant_IO.rnaseqc.gene_tpm.tsv', show_col_types=F) %>% 
+                  column_to_rownames(var='Name')
+tpm_batch_2 <- read_tsv('../raw/Batch2_240510_human_tumor_explant_IO.rnaseqc.gene_tpm.tsv', show_col_types=F) %>% 
+                  column_to_rownames(var='Name')
+tpm_batch <- cbind(tpm_batch_1, tpm_batch_2)
+```
+
+```{r}
+assayData <- as.matrix(tpm_batch)
+
+phenoData <- merge(data, 
+                   colnames(tpm_batch), 
+                   by.x='admera_health_sample_id',
+                   by.y=1,
+                   all.x=F,
+                   all.y=T) %>%
+             AnnotatedDataFrame()
+rownames(phenoData) <- phenoData$admera_health_sample_id
+
+featureData <- useEnsembl(biomart = 'genes', dataset = 'hsapiens_gene_ensembl') %>%
+                getBM(attributes=c('ensembl_gene_id', 
+                                   'hgnc_symbol', 
+                                   'description', 
+                                   'gene_biotype'),
+                      mart=.) %>%
+                merge(., 
+                      rownames(tpm_batch), 
+                      by.x='ensembl_gene_id',
+                      by.y=1,
+                      all.x=F,
+                      all.y=T) %>%
+                distinct(., ensembl_gene_id, .keep_all=T) %>%
+                column_to_rownames(var='ensembl_gene_id') %>%
+                AnnotatedDataFrame()
+
+expset <- ExpressionSet(assayData, phenoData, featureData)
+```
+
+```{r}
+saveRDS(expset, '../data/expset.rds')
+```
+
+### Virus Data
+
+```{r}
+raw_virus_exprs <- readRDS('../raw/explants_batch1+2_virus.rds')
+virus_exprs <- raw_virus_exprs
+
+data <- virus_exprs %>%
+          rownames() %>% 
+          data.frame(RefSeq=str_extract(., 'NC_[:digit:]*'), 
+                     row.names=.)
+
+raw_virus_data <- read_tsv('../raw/homo_sapiens.virus.tsv', T)
+virus_data <- raw_virus_data %>%
+                data.frame(.)
+virus_data[,'RefSeq'] <- str_extract(virus_data[,'RefSeq'], 'NC_[:digit:]*')
+
+data <- merge(data, virus_data, all.x=T, by='RefSeq')
+rownames(data) <- rownames(virus_exprs)
+
+
+virus_expset <- ExpressionSet(assayData=as.matrix(virus_exprs),
+                              featureData=AnnotatedDataFrame(data),
+                              phenoData=phenoData)
+```
+
+```{r}
+saveRDS(virus_expset, '../data/virus_expset.rds')
+```

@@ -1,0 +1,107 @@
+### Setup
+
+```{r}
+library(edgeR)
+library(limma)
+library(RColorBrewer)
+library(gplots)
+library(ggbiplot)
+library(Biobase)
+library(pheatmap)
+library(reshape2)
+library(xCell)
+library(quantiseqr)
+```
+
+### Data
+
+```{r}
+tpm_expset <- readRDS("tpm_expset.Rds")
+gs <- readRDS("bindea_genesets.rds")
+tpm_expset_hgnc <- readRDS("tpm_expset_hgnc.Rds")
+ltpm <- log2(exprs(tpm_expset) + 1)
+indications <- factor(tpm_expset$indication)
+colors <- c('red','orange','yellow','limegreen','green','lightblue','blue','purple','magenta','pink')
+```
+
+### Heatmap
+
+Clustered heatmap of the top 5% most variable genes. Seems less clustered than the graphs made from the other dataset, but we can still see good clustering with the lime green and light pink because of the highly expressed genes (near the bottom). Hot pink also seems to be correctly clustered, though the visual clustering is less clear. Interestingly, some yellow samples (CRC) seemed to cluster well with the high expression in the lower-middle section of genes, but this wasn't seen in the other two yellow samples that didn't cluster with the rest. The dark (NSCLC) and light blue (HNSCC) seem to be mixed up together and forming small clusters.
+
+```{r}
+gene_vars <- apply(ltpm, 1, var)
+select_genes <- gene_vars >= quantile(gene_vars, 0.95)
+heatmap.2(ltpm[select_genes,], col=rev(colorRampPalette(brewer.pal(11,"RdYlBu"))(50)), trace="none", main="Top 5% most variable genes across samples", ColSideColors=colors[indications], scale="row")
+```
+
+### PCA
+
+PCA plot of expression values and indications of top 5% variable genes. The samples seem to be clustered, though less clustered than that of the other data set (which is consistent with the heatmap). PDAC seems to be on the upper-right side of the graph except for sample that's on the upper left. The HNSCC and HNSCLC clusters are more separated than what was shown in the heatmaps (where they clustered together), though the NSCLC seems to be very spread out. In general, it looks like most of the samples are on the right side of the graph except for the HCC and BLCA, which may be because of the low sample sizes for those indications.
+
+```{r}
+pca <- prcomp(t(ltpm[select_genes,]), center=T, scale.=T)
+ggbiplot(pca, var.axes=F, groups=indications) +
+  labs(color="Indications")
+```
+
+### Voom
+
+```{r}
+design <- model.matrix(~ 0 + indications)
+colnames(design) <- levels(indications)
+v <- voom(tpm_expset, design, plot=T)
+```
+
+### \_\_\_\_\_ vs MET vs \_\_\_\_\_ vs \_\_\_\_\_
+
+Boxplots of expression values vs indication for different genes. For\_\_\_\_\_, we see that most indications had expression values from 8.5 to 11.5, except for BLCA, which had a value of 7, which shows that \_\_\_\_\_ may be down-regulated in BLCA. However, since we only have one sample for BLCA, it may just be an outlier. \_\_\_\_\_ also seems to be more highly expressed in general compared to the other genes since the expression values are higher. For MET, we see that the RCC samples had high expression values compared to the rest, while GIST and BLCA seemed to be lower in expression, which shows that RCC may be upregulating MET while GIST and BLCA is downregulating it. Again, however, BLCA and GIST both have 1 sample, so this may be due to low sample size. So, the high RCC expression is more significant. For \_\_\_\_\_, we see that BLCA, BRCA, and HNSCC seem to overexpress it while GIST, HCC, and RCC seem to underexpress it. \_\_\_\_\_ seems to be similarly expressed in all the indications except for BLCA (or maybe an issue with sample size again), though we see an outlier in RCC.
+
+```{r}
+data <- t(v$E)
+colnames(data) <- v$genes$hgnc_symbol
+data <- melt(data[,c('_____','MET','_____','_____')], varnames=c('sample', 'gene'), value.name='expression')
+data[,'indication'] <- indications
+
+ggplot(data, aes(x=indication, y=expression)) + 
+  geom_boxplot(outliers=F) + 
+  geom_jitter(aes(color=indication)) +
+  theme_bw(base_size=15) +
+  facet_wrap(~gene, nrow=2, ncol=2, scales='free') + 
+  theme(axis.text.x=element_text(angle=90, vjust=0.5, hjust=1))
+```
+
+### xCell
+
+Heatmap of the gene sets expressed in the samples. We see that a lot of the samples show high expression of genes common in epithelial cells, especially samples with indications of HNSCC, CRC, NSCLC, and BRCA. This makes sense since HNSCCs develop in the oral mucosal epithelium, CRC develops in colonic and rectal epithelial tissues, and NSCLC is a type of epithelial lung cancer. Similarly, we see high hepatocyte genes only in the HCC samples which makes sense since it occurs in those cells. There is also clustering in the bottom left side of the heatmap, but there doesn't seem to be a pattern in which indications are clustering there except for the PDAC and HCC indications.
+
+```{r}
+gsea <- xCellAnalysis(exprs(tpm_expset_hgnc))[c('Epithelial cells','Hepatocytes','Tregs','Neutrophils','CD4+ T-cells','Erythrocytes', 'NK cells','Platelets','Macrophages','Monocytes','B-cells','CD8+ T-cells','Mesangial cells','MicroenvironmentScore','Endothelial cells','Pericytes','cDC','ImmuneScore','Smooth muscle','Fibroblasts','StromaScore'),]
+
+ann_df <- data.frame(indication=indications)
+rownames(ann_df) <- colnames(gsea)
+ann_colors <- colors
+names(ann_colors) <- levels(indications)
+ann_colors <- list(indication=ann_colors)
+
+pheatmap(gsea,
+         labels_row=rownames(gsea),
+         annotation_col=ann_df,
+         annotation_colors=ann_colors,
+         clustering_method='ward.D2')
+```
+
+### QuanTIseq
+
+QuanTIseq plots on cell types vs samples (with indication on second graph). The BLCA sample seems have very low expression of the listed genes, which is unlike the other samples, and the GIST sample has a very high macrophage m2 and dendritic cell gene expression, which is also very unlike the rest of the samples. We also see that one of the RCC samples has very high CD8+ T cell gene expression, though this may just be an outlier since none of the other RCC samples are similar. Other than those specific samples, it's hard to see if there's any other patterns in the data.
+
+```{r}
+ti_racle <- run_quantiseq(expression_data=exprs(tpm_expset_hgnc),
+              signature_matrix='TIL10',
+              is_arraydata=F,
+              is_tumordata=T,
+              scale_mRNA=T)
+quantiplot(ti_racle)
+rownames(ti_racle) <- paste(indications, substring(rownames(ti_racle), first=10))
+ti_racle <- ti_racle[order(rownames(ti_racle)),]
+quantiplot(ti_racle)
+```

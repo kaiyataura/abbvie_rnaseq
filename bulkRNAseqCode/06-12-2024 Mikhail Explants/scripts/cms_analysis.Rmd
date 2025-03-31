@@ -1,0 +1,122 @@
+### Setup
+
+```{r}
+library(edgeR)
+library(limma)
+library(RColorBrewer)
+library(gplots)
+library(ggbiplot)
+library(tidyverse)
+library(org.Hs.eg.db)
+library(CMSclassifier)
+library(biomaRt)
+```
+
+### Notes
+
+-   Paper uses "Level 3 TCGA RNA-seq Data" - check if input data is "level 3"
+
+### Data
+
+```{r}
+expset <- readRDS('../data/expset.rds')
+exprs(expset) <- log2(exprs(expset) + 1)
+expset <- expset[which(fData(expset)$gene_biotype == 'protein_coding'),]
+
+test_expset <- readRDS('../raw/crc_tcga_expressionset_tpm_2020-07-17.RDS')
+
+exprs(test_expset) <- log2(exprs(test_expset) + 1)
+
+test_labels <- read_tsv('../raw/cms_labels_public_all.txt', show_col_types=F)
+```
+
+### CMS Classification
+
+```{r}
+ids <- useEnsembl(biomart = 'genes', dataset = 'hsapiens_gene_ensembl') %>%
+                getBM(attributes=c('ensembl_gene_id', 
+                                   'entrezgene_id'),
+                      mart=.)
+
+temp <- expset %>%
+          exprs() %>%
+          rownames() %>%
+          merge(ids,
+            by.x=1,
+            by.y='ensembl_gene_id',
+            all.x=F, all.y=F) %>%
+          distinct(., entrezgene_id, .keep_all=T) %>%
+          .[!is.na(.$entrezgene_id),]
+
+
+expset_clean <- expset[temp$x,] %>%
+          .[,pData(.)$reduced_location == 'Colon/Rectum']
+data <- exprs(expset_clean)
+rownames(data) <- temp$entrezgene_id
+
+cms <- classifyCMS(data, method='SSP')
+```
+
+#### Test Dataset
+
+```{r}
+test_expset_clean <- fData(test_expset) %>%
+          distinct(., ENTREZID, .keep_all=T) %>%
+          .[!is.na(.$ENTREZID),] %>%
+        .$ENSEMBL %>%
+        test_expset[.,]
+
+temp <- merge(pData(test_expset_clean), test_labels, by.x='sample_id', by.y='sample', all.x=F, all.y=F) %>%
+  column_to_rownames(var='sample_name')
+test_expset_clean <- test_expset_clean[,rownames(temp)]
+pData(test_expset_clean) <- temp
+
+test_expset_clean <- test_expset_clean[,which(test_expset_clean$sample_class == 'TUMOR')]
+
+View(test_expset_clean %>% pData())
+temp <- test_expset_clean %>%
+          exprs() %>%
+          rownames() %>%
+          merge(ids,
+            by.x=1,
+            by.y='ensembl_gene_id',
+            all.x=F, all.y=F) %>%
+          distinct(., entrezgene_id, .keep_all=T) %>%
+          .[!is.na(.$entrezgene_id),]
+
+test_expset_clean <- test_expset_clean[temp$x,]
+data <- test_expset_clean %>% exprs() %>% as.data.frame()
+rownames(data) <- temp$entrezgene_id
+test_cms <- classifyCMS(data, method='SSP')
+View(data)
+
+test_cms$predictedCMS[is.na(test_cms$predictedCMS)] <- 'NOLBL'
+
+pData(test_expset_clean)$predictedCMS <- test_cms$predictedCMS$SSP
+View(test_cms)
+View(pData(test_expset_clean))
+
+View(pData(test_expset_clean))
+
+table(pData(test_expset_clean)[,c('CMS_final_network_plus_RFclassifier_in_nonconsensus_samples')])
+table(pData(test_expset_clean)[,c('CMS_final_network_plus_RFclassifier_in_nonconsensus_samples', 'predictedCMS')])
+table(pData(test_expset_clean)[,c('CMS_network', 'predictedCMS')])
+table(pData(test_expset_clean)[,c('CMS_RFclassifier', 'predictedCMS')])
+table(pData(test_expset_clean)[,c('clust_assign_max_raw', 'predictedCMS')])
+table(pData(test_expset_clean)[,c('clust_assign_4_raw', 'predictedCMS')])
+table(pData(test_expset_clean)[,c('clust_assign_4_label', 'predictedCMS')])
+table(pData(test_expset_clean)[,c('clust_assign_4_tolga', 'predictedCMS')])
+
+
+```
+
+### Test Results Export
+
+```{r}
+data <- data.frame(sample=colnames(test_expset_clean),
+                   label=test_expset_clean$CMS_final_network_plus_RFclassifier_in_nonconsensus_samples,
+                   prediction=test_expset_clean$predictedCMS, row.names=1)
+View(data)
+
+write.csv(data, '../output/CMS_test_data.csv')
+```

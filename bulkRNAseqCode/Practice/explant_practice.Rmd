@@ -1,0 +1,332 @@
+## 2024-05-22 Tumor explants (PMED) RNAseq Analysis from counts (protein-coding genes only)
+
+### Setup
+
+```{r}
+library(edgeR)
+library(limma)
+library(RColorBrewer)
+library(gplots)
+library(ggbiplot)
+library(Biobase)
+library(GO.db)
+library(org.Hs.eg.db)
+```
+
+```{r}
+rna_counts <- read.csv("rna_counts.csv", row.names=1)
+sample_meta <- read.csv("sample_metadata.csv", row.names=1)
+gene_features <- read.csv("genefeature_data.csv", row.names=1)
+y <- DGEList(rna_counts, samples=sample_meta, genes=gene_features)
+```
+
+```{r}
+cpms <- cpm(rna_counts)
+keep <- rowSums(cpms > 0.5) >= 2
+summary(keep)
+```
+
+### CPM
+
+In the first sample, the slope of the line formed by the cpm vs rna_counts is much lower compared to that of the second sample, meaning a cpm cutoff of 0.5 removes genes with counts lower than \~10 for the first sample, while the same cutoff removes genes with counts lower than \~22 in the second sample. This is caused by the much smaller library size of sample 1.
+
+```{r}
+plot(cpms[,1], rna_counts[,1], ylim=c(0,50), xlim=c(0,3))
+abline(v=0.5)
+
+plot(cpms[,2], rna_counts[,2], ylim=c(0,50), xlim=c(0,3))
+abline(v=0.5, h=10, col="blue")
+```
+
+Filtering out genes with low cpms.
+
+```{r}
+y <- y[keep, keep.lib.sizes=F]
+```
+
+A bar plot of the library sizes for each sample; the values seem to be around the same at \~55M, except for the first sample (7465.DA.0010) with only \~18M. So, sample 1 seems to be an outlier.
+
+```{r}
+barplot(y$samples$lib.size / 1e6,         # scale down by a millioin
+        names=colnames(y),                # category labels
+        las=2,                            # style of axis labels (perp to axis)
+        main="Barplot of library sizes",  # title
+        cex.names=0.75)                   # magnification of bar labels
+mtext(side = 1, text = "Samples")
+mtext(side = 2, text = "Library size (millions)", line = 3)
+```
+
+We can see some variation in the logCPMs of the genes among the samples before normalizing. After normalizing, the median values for the genes in each sample matches much better with the overall median, meaning the normalization correctly scaled up the samples with low log counts and scaled down the sample with high log counts.
+
+```{r}
+logcounts <- cpm(y, log=TRUE)
+unnorm_logcounts <- logcounts
+boxplot(logcounts, xlab="", ylab="Log2 counts per million", las=2)
+abline(h=median(logcounts), col="blue")
+title("Boxplots of logCPMs (unnormalized)")
+
+y <- calcNormFactors(y)
+
+logcounts <- cpm(y, log=TRUE)
+boxplot(logcounts, xlab="", ylab="Log2 counts per million", las=2)
+abline(h=median(logcounts), col="blue")
+title("Boxplots of logCPMs (normalized)")
+```
+
+### PCA
+
+A multidimensional scaling plot of the logFC of the data labelled with the indications. Looks like the HCC (lime) and RCC (light pink) are related in some way and NSCLC (dark blue) and HNSCC (light blue) are also related in some way, since they are clustered. The rest are also in a cluster, so they're also probably related.
+
+```{r}
+indications <- factor(sample_meta$indication)
+colors <- c('red','orange','yellow','limegreen','green','lightblue','blue','purple','magenta','pink')
+
+plotMDS(y,                          # input
+        main="Indications",         # title
+        col=colors[indications],    # data point colors
+        pch=4)                      # plot X-shaped points instead of labels
+legend("bottomright",               # legend position
+       fill=colors,                 # legend colors
+       legend=levels(indications),  # legend labels
+       cex=0.7)                     # legend label magnification
+```
+
+### Heatmap
+
+Similar to the MDS plot above, we see that the light blue and dark blue (and red) indications are similar since they cluster together in the heatmap. We also see this for the pink, which don't cluster with any other indications. However, we can see more clearly how we can see a difference between the different indications than from the MDS plots, with how the oranges, purples, yellows, and limes cluster with only themselves.
+
+```{r}
+var_genes <- apply(logcounts, 1, var) # apply func. `var` to counts of each gene
+select_var <- names(sort(var_genes, decreasing=TRUE))[1:500] # select top 500
+highly_variable_lcpm <- logcounts[select_var,] # filter top 500 by gene name
+
+palette <- brewer.pal(11, "RdYlBu") # change color palette
+morecols <- colorRampPalette(palette)
+col.cell <- colors[indications] # match colors to each indication type
+
+heatmap.2(highly_variable_lcpm,           # input
+          col=rev(morecols(50)),          # heatmap colors        
+          trace="none",                   # disable trace line
+          main="Top 500 variable genes",  # title
+          ColSideColors=col.cell,         # sidebar colors for indications
+          scale="row")                    # scale values across genes
+```
+
+### Normalization
+
+We can see that the points (genes) in the plot for the unnormalized values of sample 1 and 2 is unevenly distributed across the middle median line, and adding the normalization moved down the points to better distribute the genes across the median line.
+
+```{r}
+par(mfrow=c(1,2)) # show 2 plots per window
+
+# plot unnormalized sample 1 vs sample 2
+plotMD(logcounts, column=1)
+abline(h=0, col="gray")
+plotMD(logcounts, column=2)
+abline(h=0, col="gray")
+
+# plot normalized sample 1 vs sample 2
+plotMD(y, column=1)
+abline(h=0, col="gray")
+plotMD(y, column=2)
+abline(h=0, col="gray")
+
+# plot unnormalized vs normalized sample 1
+plotMD(logcounts, column=1)
+abline(h=0, col="gray")
+plotMD(y, column=1)
+abline(h=0, col="gray")
+```
+
+### PCA
+
+PCA plot of the top 5% variable genes. Very similar to the results of the MDS plot with the clustering.
+
+```{r}
+select_top_5 <- var_genes %>% # select top 5% variable genes
+  sort(decreasing=T) %>%
+  names() %>%
+  .[1:(0.05*length(var_genes))]
+pca <- prcomp(t(logcounts[select_top_5,]), scale.=T) # apply pca
+ggbiplot(pca, # input
+         var.axes=F, # disable arrows
+         groups=sample_meta$indication) + # group data by indication
+  geom_point(color="hotpink", # hotpink highlight color
+             shape=1,         # circle around datapoint to highlight
+             size=4,          # size of circle
+             alpha=(colnames(logcounts)=="X7465.DA.0010")) + # hide everything else
+  labs(color="Indications") # label legend
+```
+
+### ExpressionSet
+
+Converting DGEList to ExpressionSet
+
+```{r}
+assayData <- as.matrix(rna_counts)
+phenoData <- AnnotatedDataFrame(sample_meta)
+rownames(gene_features) <- gene_features$ensembl_gene_id # rownames = gene names
+featureData <- AnnotatedDataFrame(gene_features)
+expset <- ExpressionSet(assayData, phenoData, featureData)
+```
+
+### Voom Normalization
+
+Using voom to normalize the data.
+
+```{r}
+design <- model.matrix(~ 0 + indications)
+colnames(design) <- levels(indications)
+v <- voom(y, design, plot=T)
+```
+
+Comparing unnormalized vs voom-normalized logCPMs. We can see that the median lines for each of the samples becomes much closer to the overall median after voom-transforming. We also see more outlier points appear on the bottom side, which is different from the normal normalization method.
+
+```{r}
+boxplot(unnorm_logcounts,                # input
+        xlab="",                         # x-axis label
+        ylab="Log2 counts per million",  # y-axis label
+        las=2,                           # perp. axis labels
+        main="Unnormalized logCPM")      # title
+abline(h=median(logcounts), 
+       col="blue")
+
+boxplot(logcounts, 
+        xlab="",
+        ylab="Log2 counts per million", 
+        las=2, 
+        main="Normalized logCPM")
+abline(h=median(logcounts), 
+       col="blue")
+
+boxplot(v$E, 
+        xlab="", 
+        ylab="Log2 counts per million",
+        las=2, 
+        main="Voom transformed logCPM")
+abline(h=median(v$E), 
+       col="blue")
+```
+
+### Differential Expression
+
+Calculate differential expression of RCC vs HNSCC, BRCA vs RCC, and BRCA vs HNSCC.
+
+```{r}
+fit <- lmFit(v)
+fit.cont <- makeContrasts(RCCvsHNSCC=RCC-HNSCC, 
+                          BRCAvsRCC=BRCA-RCC, 
+                          BRCAvsHNSCC=BRCA-HNSCC, 
+                          levels=design) |>  # selects indications to compare
+  contrasts.fit(fit=fit) |>     # apply fit data to contrasts to estimate params
+  eBayes()                      # calculate stats (p-values)
+summa.fit <- decideTests(fit.cont) # decide diffenetially expressed or not
+```
+
+MD and volcano plots for each differential expression comparison. For the volcano plots, we see that the most differentially expressed genes are on the top and on the left or right side of the graph, since this means a very low p-value and high fold change magnitude, which means higher differential expression.
+
+```{r}
+par(mfrow=c(1,2))
+plotMD(fit.cont,                # input
+       coef=1,                  # plot RCCvsHNSCC
+       status=summa.fit,        # give each point a DE value of 1, 0, or -1
+       values=c(-1, 1),         # highlight values of 1 and -1
+       hl.col=c("blue","red"))  # highlight 1: blue, -1: red
+volcanoplot(fit.cont,           # input
+            coef=1,             # plot RCCvsHNSCC
+            highlight=20,       # highlight top 20 genes
+            names=fit.cont[,"RCCvsHNSCC"]$genes$hgnc_symbol, # label highlighta
+            main="RCCvsHNSCC")  # title
+
+par(mfrow=c(1,2))
+plotMD(fit.cont, 
+       coef=2,                  # plot BRCAvsRCC
+       status=summa.fit,
+       values=c(-1, 1),
+       hl.col=c("blue","red"))
+volcanoplot(fit.cont,
+            coef=2,             # plot BRCAvsRCC
+            highlight=20, 
+            names=fit.cont[,"BRCAvsRCC"]$genes$hgnc_symbol,
+            main="BRCAvsRCC")
+
+par(mfrow=c(1,2))
+plotMD(fit.cont, 
+       coef=3,                   # plot BRCAvsHNSCC
+       status=summa.fit,
+       values=c(-1, 1), 
+       hl.col=c("blue","red"))
+volcanoplot(fit.cont, 
+            coef=3,              # plot BRCAvsHNSCC
+            highlight=20,
+            names=fit.cont[,"BRCAvsHNSCC"]$genes$hgnc_symbol,
+            main="BRCAvsHNSCC")
+```
+
+Venn diagram of overlapping differentially expressed genes. There is a lot of genes that are differentially expressed in both the RCC vs HNSCC and BRCA vs HNSCC comparisons.
+
+```{r}
+vennDiagram(summa.fit,                           # input
+            include=c("up","down"),              # display counts for both + and -
+            counts.col=c("red","blue"),          # counts color
+            circle.col=c("red","blue","green"))  # color for circles
+```
+
+Plot of expression values of the first gene in the different samples clustered by indication. Looks like PLCA, HCC, and OV have high expression values for this gene since they're higher up on the graph. BRCA, CRC, HNSCC, etc. seem to be distributed in expression values.
+
+```{r}
+stripchart(v$E["ENSG00000000003",] ~ indications,  # model formula
+           vertical=T,                             # graph direction
+           las=2,                                  # perp. axis labels
+           pch=16,                                 # point shape
+           cex=1.3,                                # magnification
+           cex.axis=0.8,                           # axis label magnification
+           col=colors,                             # point colors
+           method="jitter",                        # separate coincident points
+           ylab="Normalized log2 expression",      # y axis label
+           main="ENSG00000000003")                 # title
+```
+
+Ranking genes according to p-value and log FC to be able to select genes with highest differential expression.
+
+```{r}
+fit.treat <- treat(fit.cont, lfc=1) # rank by expression with p-value and log FC
+res.treat <- decideTests(fit.treat) # decide if differentially expressed
+
+topTable(fit.treat, coef=1, sort.by="p", number=20) # RCCvsHNSCC
+topTable(fit.treat, coef=2, sort.by="p", number=20) # BRCAvsRCC
+topTable(fit.treat, coef=3, sort.by="p", number=20) # BRCAvsHNSCC
+```
+
+Plotting highly differentially expressed genes for each comparison. Seems like RCC and HNSCC has much more high DE genes compared to the other two comparisons, so maybe RCC and HNSCC are very different to each other compared to RCC and BRCA or BRCA and HNSCC.
+
+```{r}
+plotMD(fit.treat,               # input
+       coef=1,                  # plot RCCvsHNSCC
+       status=res.treat,        # give each point a DE value of 1, 0, or -1 
+       values=c(-1,1),          # highlight values of 1 and -1
+       hl.col=c("blue","red"))  # highlight 1: blue, -1: red
+abline(h=0,col="gray")
+
+plotMD(fit.treat, 
+       coef=2,                  # plot BRCAvsRCC
+       status=res.treat, 
+       values=c(-1,1),
+       hl.col=c("blue","red"))
+abline(h=0,col="gray")
+
+plotMD(fit.treat, 
+       coef=3,                  # plot BRCAvsHNSCC
+       status=res.treat, 
+       values=c(-1,1),
+       hl.col=c("blue","red"))
+abline(h=0,col="gray")
+```
+
+### Goana
+
+```{r}
+go <- goana(fit.cont, coef="RCCvsHNSCC", species="Hs")
+topGO(go, n=10)
+fit.cont
+```

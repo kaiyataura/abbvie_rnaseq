@@ -1,0 +1,529 @@
+### "Setup
+
+```{r}
+library(tidyverse)
+library(Seurat)
+library(SingleR)
+library(RColorBrewer)
+library(reshape2)
+library(patchwork)
+
+.no_load <- F # set to TRUE if you want to re-run everything without loading saves (will take forever)
+# or load everything with data/workspace.RData
+```
+
+### Data
+
+```{r}
+# only for re-running everything from the beginning
+if (.no_load) {
+  cellmix <- readRDS('../data/filtered_cellmix.Rds')
+  Idents(cellmix) <- cellmix$manual_clusters
+  explant.fine <- readRDS('../data/filtered_explant.Rds')
+  explant.broad <- explant.fine
+  Idents(explant.fine) <- explant.fine$manual_clusters.fine
+  Idents(explant.broad) <- explant.broadad$manual_clusters.broad
+}
+```
+
+### Splitting + Cleaning
+
+```{r}
+immune_types <- c("CD4 T cells", "NK cells", "CD8 T cells", "B cells", "Monocytes / Myeloid", "Other T cells", "NKT cells")
+stromal_types <- c("Tumor", "Fibroblasts 1", "Fibroblasts 2", "Doublets")
+  
+if (.no_load) {
+  # re-run everything
+  immune <- cellmix[,cellmix$sample %in% c('1', '3')]
+  stromal <- cellmix[,cellmix$sample %in% c('2', '4')]
+  
+  immune <- subset(immune, subset=manual_clusters %in% immune_types)
+  stromal <- subset(stromal, subset=manual_clusters %in% stromal_types)
+} else {
+  # load the saved files
+  immune <- readRDS('../data/integrated_immune.Rds')
+  stromal <- readRDS('../data/integrated_stromal.Rds')
+  explant.fine <- readRDS('../data/integrated_explant_fine.Rds')
+  explant.broad <- readRDS('../data/integrated_explant_broad.Rds')
+}
+```
+
+### Integration
+
+```{r fig.height=10, fig.width=20}
+
+# re-run clustering; will take absolutely forever
+
+if (.no_load) {
+  immune$RNA <- split(immune$RNA, f=immune$treatment)
+  immune <- SCTransform(immune)
+  immune <- RunPCA(immune)
+  immune <- RunUMAP(immune, dims = 1:30)
+  DimPlot(immune, reduction="umap", group.by=c("treatment", "manual_clusters"))
+  immune <- IntegrateLayers(immune, method=CCAIntegration, normalization.method="SCT", verbose=F)
+  immune <- FindNeighbors(immune, reduction="integrated.dr", dims=1:30)
+  immune <- FindClusters(immune, resolution=0.6)
+  immune <- RunUMAP(immune, dims=1:30, reduction="integrated.dr")
+  
+  stromal$RNA <- split(stromal$RNA, f=stromal$treatment)
+  stromal <- SCTransform(stromal)
+  stromal <- RunPCA(stromal)
+  stromal <- RunUMAP(stromal, dims = 1:30)
+  DimPlot(stromal, reduction="umap", group.by=c("treatment", "manual_clusters"))
+  stromal <- IntegrateLayers(stromal, method=CCAIntegration, normalization.method="SCT", verbose=F)
+  stromal <- FindNeighbors(stromal, reduction="integrated.dr", dims=1:30)
+  stromal <- FindClusters(stromal, resolution=0.6)
+  stromal <- RunUMAP(stromal, dims=1:30, reduction="integrated.dr")
+  
+  explant.fine$RNA <- split(explant.fine$RNA, f=explant.fine$treatment)
+  explant.fine <- SCTransform(explant.fine)
+  explant.fine <- RunPCA(explant.fine)
+  explant.fine <- RunUMAP(explant.fine, dims = 1:30)
+  DimPlot(explant.fine, reduction="umap", group.by=c("treatment", "manual_clusters.fine"))
+  explant.fine <- IntegrateLayers(explant.fine, method=CCAIntegration, normalization.method="SCT", verbose=F)
+  explant.fine <- FindNeighbors(explant.fine, reduction="integrated.dr", dims=1:30)
+  explant.fine <- FindClusters(explant.fine, resolution=0.6)
+  explant.fine <- RunUMAP(explant.fine, dims=1:30, reduction="integrated.dr")
+  
+  explant.broad$RNA <- split(explant.broad$RNA, f=explant.broad$treatment)
+  explant.broad <- SCTransform(explant.broad)
+  explant.broad <- RunPCA(explant.broad)
+  explant.broad <- RunUMAP(explant.broad, dims = 1:30)
+  DimPlot(explant.broad, reduction="umap", group.by=c("treatment", "manual_clusters.broad"))
+  explant.broad <- IntegrateLayers(explant.broad, method=CCAIntegration, normalization.method="SCT", verbose=F)
+  explant.broad <- FindNeighbors(explant.broad, reduction="integrated.dr", dims=1:30)
+  explant.broad <- FindClusters(explant.broad, resolution=0.6)
+  explant.broad <- RunUMAP(explant.broad, dims=1:30, reduction="integrated.dr")
+  
+  # saveRDS(immune, '../data/integrated_immune.Rds')
+  # saveRDS(stromal, '../data/integrated_stromal.Rds')
+  # saveRDS(explant.fine, '../data/integrated_explant_fine.Rds')
+  # saveRDS(explant.broad, '../data/integrated_explant_broad.Rds')
+}
+```
+
+### Integrated UMAP
+
+```{r fig.height=10, fig.width=20}
+DimPlot(immune, reduction="umap", group.by=c("treatment", "manual_clusters")) +
+  plot_annotation(title="Integrated Immune Samples UMAP", theme=theme(plot.title=element_text(size=30))) &
+  theme(text=element_text(size=30), legend.position="bottom")
+DimPlot(stromal, reduction="umap", group.by=c("treatment", "manual_clusters")) +
+  plot_annotation(title="Integrated Stromal Samples UMAP", theme=theme(plot.title=element_text(size=30))) &
+  theme(text=element_text(size=30), legend.position="bottom")
+DimPlot(explant.fine, reduction="umap", group.by=c("treatment", "manual_clusters.fine")) +
+  plot_annotation(title="Integrated Explant Samples UMAP (Fine)", theme=theme(plot.title=element_text(size=30))) &
+  theme(text=element_text(size=30), legend.position="bottom")
+DimPlot(explant.broad, reduction="umap", group.by=c("treatment", "manual_clusters.broad")) +
+  plot_annotation(title="Integrated Explant Samples UMAP (Broad)", theme=theme(plot.title=element_text(size=30))) &
+  theme(text=element_text(size=30), legend.position="bottom")
+
+DimPlot(immune, split.by="treatment") +
+  plot_annotation(title="Integrated Immune Samples UMAP", theme=theme(plot.title=element_text(size=30))) &
+  theme(text=element_text(size=30))
+DimPlot(stromal, split.by="treatment") +
+  plot_annotation(title="Integrated Stromal Samples UMAP", theme=theme(plot.title=element_text(size=30))) &
+  theme(text=element_text(size=30))
+DimPlot(explant.fine, split.by="treatment") +
+  plot_annotation(title="Integrated Explant Samples UMAP (Fine)", theme=theme(plot.title=element_text(size=30))) &
+  theme(text=element_text(size=30))
+DimPlot(explant.broad, split.by="treatment") +
+  plot_annotation(title="Integrated Explant Samples UMAP (Broad)", theme=theme(plot.title=element_text(size=30))) &
+  theme(text=element_text(size=30))
+```
+
+### Composition Bar Plots
+
+```{r fig.height=6, fig.width=7}
+
+# use position="stack" for absolute composition bar plots
+
+(immune@meta.data[,c("treatment", "manual_clusters")] %>%
+  ggplot(aes(fill=manual_clusters, x=treatment))) +
+  geom_bar(position="fill") + 
+  scale_fill_manual(values=colorRampPalette(brewer.pal(12, "Set3"))(length(unique(immune$manual_clusters)))) +
+  theme_bw(base_size=15) +
+  labs(title="Cell-Type Composition of Cellmix Immune Samples", x="Treatment", y="Composition", fill="Cell Type") + 
+  theme(axis.text.x=element_text(size=20))
+
+(stromal@meta.data[,c("treatment", "manual_clusters")] %>%
+  ggplot(aes(fill=manual_clusters, x=treatment))) +
+  geom_bar(position="fill") + 
+  scale_fill_manual(values=colorRampPalette(brewer.pal(12, "Set3"))(length(unique(immune$manual_clusters)))) +
+  theme_bw(base_size=15) +
+  labs(title="Cell-Type Composition of Cellmix Stromal Samples", x="Treatment", y="Composition", fill="Cell Type") + 
+  theme(axis.text.x=element_text(size=20))
+
+(explant.fine@meta.data[,c("treatment", "manual_clusters.fine")] %>%
+  ggplot(aes(fill=manual_clusters.fine, x=treatment))) +
+  geom_bar(position="fill") + 
+  scale_fill_manual(values=colorRampPalette(brewer.pal(12, "Set3"))(length(unique(explant.fine$manual_clusters.fine)))) +
+  theme_bw(base_size=15) +
+  labs(title="Fine Cell-Type Composition of Explant Samples", x="Treatment", y="Composition", fill="Fine Cell Type") + 
+  theme(axis.text.x=element_text(size=20))
+
+(explant.broad@meta.data[,c("treatment", "manual_clusters.broad")] %>% 
+  ggplot(aes(fill=manual_clusters.broad, x=treatment))) +
+  geom_bar(position="fill") + 
+  scale_fill_manual(values=colorRampPalette(brewer.pal(12, "Set3"))(length(unique(explant.broad$manual_clusters.broad)))) +
+  theme_bw(base_size=15) +
+  labs(title="Broad Cell-Type Composition of Explant Samples", x="Treatment", y="Composition", fill="Broad Cell Type") + 
+  theme(axis.text.x=element_text(size=20))
+
+
+immune@meta.data[,c("treatment", "manual_clusters")] %>% 
+  table() %>% 
+  prop.table(margin=1) %>%
+  t() %>%
+  as.data.frame.matrix() * 100
+
+stromal@meta.data[,c("treatment", "manual_clusters")] %>% 
+  table() %>% 
+  prop.table(margin=1) %>%
+  t() %>%
+  as.data.frame.matrix() * 100
+
+explant.fine@meta.data[,c("treatment", "manual_clusters.fine")] %>% 
+  table() %>% 
+  prop.table(margin=1) %>%
+  t() %>%
+  as.data.frame.matrix() * 100
+
+explant.broad@meta.data[,c("treatment", "manual_clusters.broad")] %>% 
+  table() %>% 
+  prop.table(margin=1) %>%
+  t() %>%
+  as.data.frame.matrix() * 100
+```
+
+### Markers
+
+##### Immune
+
+```{r fig.height=15, fig.width=21}
+immune.split <- immune
+immune.split$cell.treatment <- paste(immune$manual_clusters, immune$treatment)
+Idents(immune.split) <- "cell.treatment"
+
+# will take forever if re-running everything; otherwise should be fast if loaded saved objects
+immune.split <- PrepSCTFindMarkers(immune.split)
+immune.markers <- lapply(levels(Idents(immune)), 
+                          function(x) (FindMarkers(immune.split, 
+                                                   ident.2=paste(x,"NT"),
+                                                   ident.1=paste(x,"T")) %>%
+                                        filter(!grepl("RPS|RPL|MT-", rownames(.)) & (p_val_adj < 0.05))))
+                          
+names(immune.markers) <- levels(Idents(immune))
+
+# plot top 15 markers (takes forever)
+lapply(names(immune.markers), 
+       function(x) {
+         features <- immune.markers[[x]] %>% head(15) %>% rownames()
+         if (length(features) == 0) return(NULL)
+         VlnPlot(immune,
+                 features, 
+                 split.by="treatment", 
+                 group.by="manual_clusters",
+                 ncol=5) +
+           plot_layout(guides="collect") +
+           plot_annotation(title=paste(x, "Top 15 Markers"),
+                           theme=theme(plot.title=element_text(size=30, hjust=0.6))) &
+           theme(legend.position = "left", legend.text=element_text(size=20))
+         })
+```
+
+##### Stromal
+
+```{r fig.height=15, fig.width=21}
+stromal.split <- stromal
+stromal.split$cell.treatment <- paste(stromal$manual_clusters, stromal$treatment)
+Idents(stromal.split) <- "cell.treatment"
+
+# will take forever if re-running everything; otherwise should be fast if loaded saved objects
+stromal.split <- PrepSCTFindMarkers(stromal.split)
+stromal.markers <- lapply(levels(Idents(stromal)), 
+                          function(x) {
+                            idents.1 <- paste(x, "NT")
+                            idents.2 <- paste(x, "T")
+                            if (any(!c(idents.1, idents.2) %in% levels(stromal.split))) 
+                              return(data.frame(p_val=NA, avg_log2FC=NA, pct.1=NA, pct.2=NA, p_val_adj=NA)[0,])
+                            FindMarkers(stromal.split, 
+                                                   ident.2=paste(x,"NT"),
+                                                   ident.1=paste(x,"T")) %>%
+                                        filter(!grepl("RPS|RPL|MT-", rownames(.)) & (p_val_adj < 0.05))
+                            })
+
+                          
+names(stromal.markers) <- levels(Idents(stromal))
+
+# plot top 15 markers (takes forever)
+lapply(names(stromal.markers), 
+       function(x) {
+         features <- stromal.markers[[x]] %>% head(15) %>% rownames()
+         if (length(features) == 0) return(NULL)
+         VlnPlot(stromal,
+                 features, 
+                 split.by="treatment", 
+                 group.by="manual_clusters",
+                 ncol=5) +
+           plot_layout(guides="collect") +
+           plot_annotation(title=paste(x, "Top 15 Markers"),
+                           theme=theme(plot.title=element_text(size=30, hjust=0.6))) &
+           theme(legend.position = "left", legend.text=element_text(size=20))
+         })
+```
+
+##### Explant Fine
+
+```{r fig.height=15, fig.width=21}
+explant.split.fine <- explant.fine
+explant.split.fine$cell.treatment <- paste(explant.fine$manual_clusters.fine, explant.fine$treatment)
+Idents(explant.split.fine) <- "cell.treatment"
+
+# will take forever if re-running everything; otherwise should be fast if loaded saved objects
+explant.split.fine <- PrepSCTFindMarkers(explant.split.fine)
+explant.markers.fine <- lapply(levels(Idents(explant.fine)), 
+                          function(x) (FindMarkers(explant.split.fine, 
+                                                   ident.2=paste(x,"NT"),
+                                                   ident.1=paste(x,"T")) %>%
+                                        filter(!grepl("RPS|RPL|MT-", rownames(.)) & (p_val_adj < 0.05))))
+                          
+names(explant.markers.fine) <- levels(Idents(explant.fine))
+
+# plot top 15 markers (takes forever)
+lapply(names(explant.markers.fine), 
+       function(x) {
+         features <- explant.markers.fine[[x]] %>% head(15) %>% rownames()
+         if (length(features) == 0) return(NULL)
+         VlnPlot(explant.fine,
+                 features, 
+                 split.by="treatment", 
+                 group.by="manual_clusters.fine",
+                 pt.size=0,
+                 ncol=5) +
+           plot_layout(guides="collect") +
+           plot_annotation(title=paste(x, "Top 15 Markers (Fine)"),
+                           theme=theme(plot.title=element_text(size=30, hjust=0.6))) &
+           theme(legend.position = "left", legend.text=element_text(size=20))
+         })
+```
+
+##### Explant Broad
+
+```{r fig.height=15, fig.width=21}
+explant.split.broad <- explant.broad
+explant.split.broad$cell.treatment <- paste(explant.broad$manual_clusters.broad, explant.broad$treatment)
+Idents(explant.split.broad) <- "cell.treatment"
+
+# will take forever if re-running everything; otherwise should be fast if loaded saved objects
+explant.split.broad <- PrepSCTFindMarkers(explant.split.broad)
+explant.markers.broad <- lapply(levels(Idents(explant.broad)), 
+                          function(x) (FindMarkers(explant.split.broad, 
+                                                   ident.2=paste(x,"NT"),
+                                                   ident.1=paste(x,"T")) %>%
+                                        filter(!grepl("RPS|RPL|MT-", rownames(.)) & (p_val_adj < 0.05))))
+                          
+names(explant.markers.broad) <- levels(Idents(explant.broad))
+
+# plot top 15 markers (takes forever)
+lapply(names(explant.markers.broad), 
+       function(x) {
+         features <- explant.markers.broad[[x]] %>% head(15) %>% rownames()
+         if (length(features) == 0) return(NULL)
+         VlnPlot(explant.broad,
+                 features, 
+                 split.by="treatment", 
+                 group.by="manual_clusters.broad",
+                 pt.size=0,
+                 ncol=5) +
+           plot_layout(guides="collect") +
+           plot_annotation(title=paste(x, "Top 15 Markers (Broad)"),
+                           theme=theme(plot.title=element_text(size=30, hjust=0.6))) &
+           theme(legend.position = "left", legend.text=element_text(size=20))
+         })
+```
+
+```{r fig.height=4, fig.width=8}
+
+# plot specific genes for specific cell types
+
+VlnPlot(explant.broad,
+         c("CD3D", "CD3G", "_____"), # genes to plot
+         group.by="treatment", 
+         pt.size=0, 
+         idents = "CD8 T cells", # show only CD8 T cells
+         ncol=3) +
+  plot_layout(guides="collect") +
+  plot_annotation(title=paste("CD8+ T Cell Gene Expression"),
+                  theme=theme(plot.title=element_text(size=30))) &
+  theme(axis.text.x=element_text(size=18, angle=0, hjust=0.5, vjust=0)) &
+  labs(x="Treatment", y="Expression") &
+  scale_x_discrete(labels=c("NT"="CTRL", "T"="DRUG"))
+
+VlnPlot(explant.broad,
+          c("GNLY", "_____", "_____"), # genes to plot
+          group.by="treatment",
+          pt.size=0,
+          idents = "NK cells",  # show only NK cells
+          ncol=3) +
+  plot_layout(guides="collect") +
+  plot_annotation(title=paste("NK Cell Gene Expression"),
+                  theme=theme(plot.title=element_text(size=30))) &
+  theme(axis.text.x=element_text(size=18, angle=0, hjust=0.5, vjust=0)) &
+  labs(x="Treatment", y="Expression") &
+  scale_x_discrete(labels=c("NT"="CTRL", "T"="DRUG"))
+
+       (function(x) {
+         features <- "_____"
+         if (length(features) == 0) return(NULL)
+         VlnPlot(explant.broad,
+                 features, 
+                 split.by="treatment", 
+                 group.by="manual_clusters.broad",
+                 pt.size=0,
+                 ncol=1) +
+           plot_layout(guides="collect")
+         })(1)
+```
+
+### Marker Export
+
+```{r}
+library(openxlsx)
+hgnc_genes <- read.csv("../data/hgnc_gene_table.csv") %>% distinct(., hgnc_symbol, .keep_all=T) %>% .[-1]
+
+wb <- createWorkbook()
+lapply(names(stromal.markers), 
+       function (x) {
+         name <- gsub("\\/", "+", x)
+         addWorksheet(wb, sheetName=name)
+         writeDataTable(wb, 
+                        withFilter=F,
+                        sheet=name, 
+                        x=merge(hgnc_genes, stromal.markers[[x]], by.x="hgnc_symbol", by.y=0, all.x=F, all.y=T) %>% 
+                            `rownames<-`(.,.$hgnc_symbol) %>% .[rownames(stromal.markers[[x]]),])
+       })
+saveWorkbook(wb, "../output/Stromal_Markers.xlsx")
+```
+
+### Differential Expression Counts
+
+```{r fig.height=8, fig.width=6}
+
+(explant.markers.fine %>% 
+  sapply(function(x) nrow(filter(x, p_val_adj < 1e-6))) %>% 
+  data.frame(n=.) %>%
+  ggplot(aes(x=rownames(.), y=n, fill=rownames(.)))) +
+    geom_col(position="stack") +
+    theme_bw(base_size=15) +
+    NoLegend() +
+    labs(title="Fine Explant", x="Cell-Type", y="# DE Genes") +
+      theme(axis.text.x=element_text(size=15, angle=45, vjust=1, hjust=1))
+
+(explant.markers.broad %>% 
+  sapply(function(x) nrow(filter(x, p_val_adj < 1e-6))) %>% 
+  data.frame(n=.) %>%
+  ggplot(aes(x=rownames(.), y=n, fill=rownames(.)))) +
+    geom_col(position="stack") +
+    theme_bw(base_size=15) +
+    NoLegend() +
+    labs(title="Broad Explant", x="Cell-Type", y="# DE Genes") +
+    theme(axis.text.x=element_text(size=15, angle=45, vjust=1, hjust=1))
+
+(immune.markers %>% 
+  sapply(function(x) nrow(filter(x, p_val_adj < 1e-6))) %>% 
+  data.frame(n=.) %>%
+  ggplot(aes(x=rownames(.), y=n, fill=rownames(.)))) +
+    geom_col(position="stack") +
+    theme_bw(base_size=15) +
+    NoLegend() +
+    labs(title="Immune", x="Cell-Type", y="# DE Genes") +
+    theme(axis.text.x=element_text(size=15, angle=45, vjust=1, hjust=1))
+
+(stromal.markers %>% 
+  sapply(function(x) nrow(filter(x, p_val_adj < 1e-6))) %>% 
+  data.frame(n=.) %>%
+  ggplot(aes(x=rownames(.), y=n, fill=rownames(.)))) +
+    geom_col(position="stack") +
+    theme_bw(base_size=15) +
+    NoLegend() +
+    labs(title="Stromal", x="Cell-Type", y="# DE Genes") +
+    theme(axis.text.x=element_text(size=15, angle=45, vjust=1, hjust=1))
+
+```
+
+### Density Plot
+
+```{r fig.height=10, fig.width=12}
+library(MASS)
+library(ggrepel)
+
+.plotDensity <- (function(seurat, cluster, title) {
+  data <- seurat[[c(cluster, "treatment")]]
+  data[c("umap1","umap2")] <- Embeddings(seurat, reduction = "umap")
+  
+  umap_med_1 <- tapply(data$umap1, data$manual_clusters, median)
+  umap_med_2 <- tapply(data$umap2, data$manual_clusters, median)
+
+  umap_medians <- data.frame("UMAP1" = umap_med_1,
+                             "UMAP2" = umap_med_2,
+                             "Label" = names(umap_med_2))
+  
+  limits <- c(min(data$umap1) - 2, max(data$umap1) + 2,
+              min(data$umap2) - 2, max(data$umap2) + 2)
+  
+  untreated_data <- data %>% filter(treatment == 'NT')
+  untreated_densities <- kde2d(x = untreated_data$umap1,
+                            y = untreated_data$umap2,
+                            n = 500,
+                            lims = limits)
+  untreated_data <- data.frame(untreated_densities$z)
+  colnames(untreated_data) <- untreated_densities$y
+  untreated_data$UMAP1 <- untreated_densities$x
+  untreated_data <- melt(untreated_data, id.vars = "UMAP1")
+  colnames(untreated_data) <- c("UMAP1", "UMAP2", "Density")
+  untreated_data$UMAP1 <- as.numeric(as.character(untreated_data$UMAP1))
+  untreated_data$UMAP2 <- as.numeric(as.character(untreated_data$UMAP2))
+  
+  treated_data <- data %>% filter(treatment != 'NT')
+  treated_densities <- kde2d(x = treated_data$umap1,
+                             y = treated_data$umap2,
+                             n = 500,
+                             lims = limits)
+  
+  treated_data <- data.frame(treated_densities$z)
+  colnames(treated_data) <- treated_densities$y
+  treated_data$UMAP1 <- treated_densities$x
+  treated_data <- melt(treated_data, id.vars = "UMAP1")
+  colnames(treated_data) <- c("UMAP1", "UMAP2", "Density")
+  treated_data$UMAP1 <- as.numeric(as.character(treated_data$UMAP1))
+  treated_data$UMAP2 <- as.numeric(as.character(treated_data$UMAP2))
+
+  
+  treated_data$`Density Diff` <- treated_data$Density - untreated_data$Density
+  
+  ggplot() +
+    geom_tile(data = treated_data, aes(x = UMAP1, y = UMAP2, fill = `Density Diff`)) +
+    scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                         midpoint = 0) +
+    geom_density_2d(data = data, aes(x = umap1, y = umap2),
+                    linewidth = 0.25,
+                    bins = 10,
+                    binwidth = 5,
+                    color = "black",
+                    linetype = 2) +
+    theme_bw(base_size = 20) +
+    xlim(limits[1:2]) +
+    ylim(limits[3:4]) +
+    geom_text_repel(data = umap_medians, aes(x = UMAP1, y = UMAP2, label = Label), size = 8) +
+    theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) +
+    labs(title=title)
+  #graphics.off()
+})
+
+.plotDensity(immune, "manual_clusters", "Immune Cells")
+.plotDensity(stromal, "manual_clusters", "Stromal Cells")
+.plotDensity(explant.fine, "manual_clusters.fine", "Explant Cells (Fine)")
+.plotDensity(explant.broad, "manual_clusters.broad", "Explant Cells (Broad)")
+```

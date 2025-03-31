@@ -1,0 +1,109 @@
+### Setup
+
+```{r}
+library(edgeR)
+library(limma)
+library(RColorBrewer)
+library(gplots)
+library(ggbiplot)
+library(pheatmap)
+library(reshape2)
+library(matrixStats)
+library(tidyverse)
+```
+
+### Data
+
+Using log2 expression data with only protein-coding genes. 'Reduced Location' refers to the location of the cancer but with certain categories combined: 'Larynx', 'Nasopharynx', 'Oropharynx', and 'Oral Cavity' categorites are now 'Head/Neck'; 'Colon' and 'Colon/Rectum' categories are now 'Colon/Rectum'; and 'Lung' and 'Lung & Bronchus' categories are now 'Lung/Bronchus'.
+
+```{r}
+expset <- readRDS('../data/virus_expset.rds')
+expressed <- expset %>%
+                       .[rowSums(exprs(.)) > 0] %>%
+                       fData() %>%
+                       .$RefSeq %>%
+                       unique()
+expset <- expset[fData(expset)$RefSeq %in% expressed]
+expset <- expset[order(rownames(fData(expset)))]
+expset <- expset[,order(pData(expset)$reduced_location)]
+locations <- pData(expset)$reduced_location
+```
+
+### Heatmap
+
+```{r}
+ann <- data.frame(location=locations)
+rownames(ann) <- colnames(expset)
+ann_colors <- list(location=locations %>%
+                              unique() %>%
+                              setNames(brewer.pal(length(.), 'Paired'), .))
+
+pdf('../output/virus_expressed_genes_heatmaps.pdf')
+
+for (gene in expressed) {
+  gene_symbol <- fData(expset) %>% 
+                   .[.$RefSeq == gene,] %>% 
+                   .$Abbreviation
+  gene_num <- gene_symbol %>% length()
+  gene_symbol <- gene_symbol %>% .[1]
+  for (scale in c('row', 'none')) {
+    pheatmap(exprs(expset)[fData(expset)$RefSeq == gene,], 
+             scale=scale,
+             cluster_rows=F, 
+             cluster_cols=F,
+             # show_colnames=F,
+             fontsize=2,
+             fontsize_row=4,
+             fontsize_column=2,
+             annotation_col=ann,
+             annotation_colors=ann_colors,
+             cellheight=min(460 / gene_num, 20),
+             gaps_col=match(unique(locations), locations) - 1,
+             labels_row=fData(expset)$hgnc_symbol,
+             main=str_glue('{gene_symbol} logTPM by sample (Scaled by {scale})'))
+  }
+}
+
+dev.off()
+```
+
+```{r}
+specific <- c('lcl|NC_001355.1_cds_NP_040296.1_1',
+              'lcl|NC_001355.1_cds_NP_040297.1_2',
+              'lcl|NC_001355.1_cds_NP_040298.1_3',
+              'lcl|NC_001355.1_cds_NP_040299.1_4',
+              'lcl|NC_001355.1_cds_NP_040300.1_5',
+              'lcl|NC_001355.1_cds_NP_040301.1_6',
+              'lcl|NC_001355.1_cds_NP_040302.1_7',
+              'lcl|NC_001355.1_cds_NP_040303.1_8',
+              'lcl|NC_001355.1_cds_NP_040304.1_9',
+              'lcl|NC_006273.2_cds_YP_081567.1_115',
+              'lcl|NC_006273.2_cds_YP_081597.1_146',
+              'lcl|NC_007605.1_cds_YP_401645.1_15',
+              'lcl|NC_007605.1_cds_YP_401654.1_25',
+              'lcl|NC_007605.1_cds_YP_401684.3_53',
+              'lcl|NC_007605.1_cds_YP_401695.1_66',
+              'lcl|NC_007605.1_cds_YP_401707.1_79',
+              'lcl|NC_007605.1_cds_YP_401712.1_84',
+              'lcl|NC_007605.1_cds_YP_401713.1_85')
+
+data <- expset %>%
+          exprs() %>%
+          .[specific,]
+          # .[(fData(expset)$RefSeq %in% specific) & rowSums(.) > 0,]
+
+View(expressed)
+
+pheatmap(exprs(expset)[fData(expset)$RefSeq == 'NC_001355',pData(expset)$reduced_location=='Head/Neck'], 
+             scale=scale,
+             cluster_rows=F, 
+             cluster_cols=F,
+             fontsize=9,
+             fontsize_row=4,
+             annotation_col=ann,
+             annotation_colors=ann_colors,
+             cellheight=min(460 / gene_num, 20),
+             labels_row=fData(expset)$hgnc_symbol,
+             main=str_glue('{gene_symbol} logTPM by sample (Scaled by {scale})'))
+
+```

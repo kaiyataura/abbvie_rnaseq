@@ -1,0 +1,469 @@
+### Setup
+
+```{r}
+library(edgeR)
+library(limma)
+library(RColorBrewer)
+library(gplots)
+library(ggbiplot)
+library(Biobase)
+library(pheatmap)
+library(reshape2)
+library(xCell)
+library(quantiseqr)
+library(matrixStats)
+library(tidyverse)
+library(gridExtra)
+library(ggpubr)
+library(GSVA)
+library(GSEABase)
+library(org.Hs.eg.db)
+```
+
+### Data
+
+Using log2 expression data with only protein-coding genes. 'Reduced Location' refers to the location of the cancer but with certain categories combined: 'Larynx', 'Nasopharynx', 'Oropharynx', and 'Oral Cavity' categories are now 'Head/Neck'; 'Colon' and 'Colon/Rectum' categories are now 'Colon/Rectum'; and 'Lung' and 'Lung & Bronchus' categories are now 'Lung/Bronchus'.
+
+```{r}
+expset <- readRDS('../data/expset.rds')
+
+# log tpm
+exprs(expset) <- log2(exprs(expset) + 1)
+
+# keep only protein-coding
+expset <- expset[which(fData(expset)$gene_biotype == 'protein_coding'),]
+
+hgnc_expset <- expset %>%
+                 fData() %>%
+                 .[.$hgnc_symbol != '',] %>%
+                 distinct(., hgnc_symbol, .keep_all=T) %>%
+                 rownames() %>%
+                 expset[.,]
+rownames(hgnc_expset) <- fData(hgnc_expset)$hgnc_symbol
+
+gene_sets <- readRDS('../data/ioexplants_genesets.rds')
+
+locations <- pData(expset)$reduced_location
+batches <- as.character(pData(expset)$batch)
+```
+
+### Heatmap
+
+Heatmap of expression data for the top 50 most variable genes with ward clustering, labeled by batch, reduced location, and HGNC gene name. The different locations seem to cluster very well, though we do see some mixing with kidney samples in the Colon/Rectum and Ovary clusters. We also see pancreas clustering into two clusters, one with very high TTR expression and the other with high but still lower expression of TTR and high expression in other genes unlike the first cluster. Head/Neck seems to have high expression of the SPRR- and KRT- type genes unlike other sample locations similar to Kidney having a uniquely high expression of the genes near the lower middle section of the heatmap.
+
+```{r}
+vars <- rowVars(exprs(expset))
+top_50 <- expset[names(sort(vars, decreasing=TRUE))[1:50],]
+
+ann <- data.frame(location=locations,
+                  batch=as.character(pData(expset)$batch))
+rownames(ann) <- colnames(expset)
+ann_colors <- brewer.pal(12, 'Paired')
+ann_colors <- list(batch=batches %>%
+                           unique() %>%
+                           setNames(ann_colors[1:2], .),
+                   location=locations %>%
+                              unique() %>%
+                              setNames(ann_colors[3:11], .))
+
+pheatmap(exprs(top_50), 
+         scale="none",
+         cluster_rows=T, 
+         cluster_cols=T,
+         clustering_method="ward.D2",
+         show_colnames=F,
+         fontsize_row=5,
+         annotation_col=ann,
+         annotation_colors=ann_colors,
+         labels_row=fData(top_50)$hgnc_symbol,
+         main='Top 50 Variable Genes by Location and Batch')
+```
+
+### PCA
+
+PCA plots of Batch 1 vs Batch 2 vs Batch 1&2 combined and top 5% vs top 20% variable genes labeled by reduced location/batch number. The top 5% combined batch PCA plot seems to be well-clustered, though we also see some outlier kidney samples in the Colon/Rectum cluster. The top 20% plots are more dispersed, though we still see some clustering. It also spreads out the Lung/Bronchus-Ovary combined cluster seen in the center of the 5% graph into different clusters. The PCA colored by batch shows that there is minimal batch differences. Batch 2 samples *may* be slightly higher up than batch 1 samples, though that may not be anything significant.
+
+```{r}
+top_5P <- expset[vars >= quantile(vars, 0.95)]
+top_20P <- expset[vars >= quantile(vars, 0.80)]
+
+top_5P_1 <- top_5P[,pData(top_5P)$batch == 1]
+top_20P_1 <- top_20P[,pData(top_20P)$batch == 1]
+top_5P_2 <- top_5P[,pData(top_5P)$batch == 2]
+top_20P_2 <- top_20P[,pData(top_20P)$batch == 2]
+
+ggbiplot(prcomp(t(exprs(top_5P_1)), 
+                center=T, 
+                scale.=T), 
+         var.axes=F,
+         obs.scale=1, 
+         var.scale=1,
+         groups=pData(top_5P_1)$reduced_location) +
+  labs(title='Top 5% Batch 1 PCA',
+       color='Reduced Location') +
+  theme_classic()
+
+ggbiplot(prcomp(t(exprs(top_20P_1)), 
+                center=T, 
+                scale.=T), 
+         var.axes=F,
+         obs.scale=1, 
+         var.scale=1,
+         groups=pData(top_20P_1)$reduced_location) +
+  labs(title='Top 20% Batch 1 PCA',
+       color='Reduced Location') +
+  theme_classic()
+  
+
+ggbiplot(prcomp(t(exprs(top_5P_2)), 
+                center=T, 
+                scale.=T), 
+         var.axes=F,
+         obs.scale=1, 
+         var.scale=1,
+         groups=pData(top_5P_2)$reduced_location) +
+  labs(title='Top 5% Batch 2 PCA',
+       color='Reduced Location') +
+  theme_classic()
+
+ggbiplot(prcomp(t(exprs(top_20P_2)), 
+                center=T, 
+                scale.=T), 
+         var.axes=F,
+         obs.scale=1, 
+         var.scale=1,
+         groups=pData(top_20P_2)$reduced_location) +
+  labs(title='Top 20% Batch 2 PCA',
+       color='Reduced Location') +
+  theme_classic()
+
+
+ggbiplot(prcomp(t(exprs(top_5P)), 
+                center=T, 
+                scale.=T), 
+         var.axes=F,
+         obs.scale=1, 
+         var.scale=1,
+         alpha=0) +
+  geom_point(aes(color=locations, 
+                 shape=batches)) +
+  labs(title='Top 5% Batch 1&2 PCA',
+       color='Reduced Location',
+       shape='Batch') +
+  theme_classic()
+
+ggbiplot(prcomp(t(exprs(top_20P)), 
+                center=T, 
+                scale.=T), 
+         var.axes=F,
+         obs.scale=1, 
+         var.scale=1,
+         alpha=0) +
+  geom_point(aes(color=locations, 
+                 shape=batches)) +
+  labs(title='Top 20% Batch 1&2 PCA',
+       color='Reduced Location',
+       shape='Batch') +
+  theme_classic()
+
+
+ggbiplot(prcomp(t(exprs(top_5P)), 
+                center=T, 
+                scale.=T), 
+         var.axes=F,
+         obs.scale=1, 
+         var.scale=1,
+         alpha=0) +
+  geom_point(aes(color=batches)) +
+  labs(title='Top 5% Batch 1&2 PCA',
+       color='Batch') +
+  theme_classic()
+
+ggbiplot(prcomp(t(exprs(top_20P)), 
+                center=T, 
+                scale.=T), 
+         var.axes=F,
+         obs.scale=1, 
+         var.scale=1,
+         alpha=0) +
+  geom_point(aes(color=batches)) +
+  labs(title='Top 20% Batch 1&2 PCA',
+       color='Batch') +
+  theme_classic()
+  
+```
+
+### Target Gene Expression
+
+Expression boxplots for \_\_\_\_\_, MET, \_\_\_\_\_, and \_\_\_\_\_ target genes split by reduced location/original location and batch number. \_\_\_\_\_ seems to be expressed similar in all locations though Kidney has slightly higher compared to the others. In \_\_\_\_\_, we see 2 clusters in Pancreas plot, one with high expression and the other with low expression. This is similar to what we see in the clustering in the heatmap. However, we don't see the splitting happening in the other 3 target genes.
+
+Comparing with the original locations, we see that the gene expression for the locations combined into one are very similar, and the outliers seen in the reduced location graph all seen as outliers in the original locations graph, meaning the outliers aren't caused by combining the similar locations.
+
+```{r}
+
+sets <- list(c('_____', '_____', '_____', '_____', '_____', '_____'),
+             c('_____', '_____', 'MET', '_____'))
+for (set in sets) {
+  data <- melt(exprs(hgnc_expset)[set,], 
+               varnames=c('gene', 'sample'), 
+               value.name='expression')
+  data[,'location'] <- pData(expset)[data$sample,]$reduced_location
+  data[,'reduced_location'] <- pData(expset)[data$sample,]$reduced_location
+  data[,'batch'] <- as.character(pData(expset)[data$sample,]$batch)
+  
+  (ggplot(data, aes(x=reduced_location, y=expression)) + 
+    geom_boxplot(outliers=F) + 
+    geom_jitter(size=1.5, height=0, aes(color=reduced_location, shape=batch)) +
+    theme_bw() +
+    facet_wrap(~gene, scales='free') + 
+    theme(axis.text.x=element_text(angle=90, vjust=0.5, hjust=1, size=10)) +
+    # theme(axis.text.x=element_blank()) +
+    labs(title='Target Expression Boxplots (Location)',
+         color='Location',
+         shape='Batch',
+         x='Location',
+         y='Expression')) %>% print()
+  
+  (ggplot(data, aes(x=location, y=expression)) + 
+    geom_boxplot(outliers=F) + 
+    geom_jitter(size=1.5, height=0, aes(color=location, shape=batch)) +
+    theme_bw() +
+    facet_wrap(~gene, scales='free') + 
+    theme(axis.text.x=element_text(angle=90, vjust=0.5, hjust=1, size=10)) +
+    # theme(axis.text.x=element_blank()) +
+    labs(title='Target Expression Boxplots (Original Location)',
+         color='Location',
+         shape='Batch',
+         x='Location',
+         y='Expression')) %>% print()
+}
+
+```
+
+### xCell
+
+Heatmap of xCell deconvolution with location and batch clustered with ward distance metric. Location seems to be clustered by Pancreas (first cluster) on the left, then Ovary, Colon/Rectum, Pancreas (second cluster), Head/Neck, then Kidney on the right. There is one Lung/Bronchus sample (\_\_\_\_\_) with very high microenvironment and immune scores (high B cell and hepathocytes), which is unlike the other samples.
+
+```{r}
+xcell <- xCellAnalysis(exprs(hgnc_expset))[c('Epithelial cells','Hepatocytes','Tregs','Neutrophils','CD4+ T-cells','Erythrocytes', 'NK cells','Platelets','Macrophages','Monocytes','B-cells','CD8+ T-cells','Mesangial cells','MicroenvironmentScore','Endothelial cells','Pericytes','cDC','ImmuneScore','Fibroblasts','StromaScore'),]
+pheatmap(xcell,
+         labels_row=rownames(xcell),
+         annotation_col=ann,
+         annotation_colors=ann_colors,
+         clustering_method='ward.D2',
+         scale="none",
+         cluster_rows=T, 
+         cluster_cols=T,
+         show_colnames=F,
+         fontsize_row=10,
+         main='xCell Gene Sets vs Sample Location & Batch')
+```
+
+```{r}
+plotlist <- list()
+data <- data.frame(location=locations)
+for (i in 1:nrow(xcell)) {
+  data$score <- xcell[i,]
+  plot <- ggplot(data, aes(x=location, y=score)) + 
+    geom_boxplot(outliers=F) + 
+    geom_jitter(size=1, height=0, aes(color=location)) +
+    theme_bw() +
+    theme(axis.text.x=element_text(angle=90, vjust=0.5, hjust=1)) +
+    labs(title=paste('xCell', rownames(xcell)[i], 'Boxplot'),
+         color='Reduced Location',
+         x='Reduced Location',
+         y='xCell Score')
+  plotlist <- append(plotlist, list(plot))
+}
+
+marrangeGrob(plotlist, nrow=2, ncol=2) %>%
+  ggsave("../output/xCell_boxplots.pdf", width=8.5, height=11, .)
+```
+
+### QuanTIseq
+
+Plot of QuanTIseq deconvolution of samples. Everything seems normal except for one sample (23012XR-02-39) with very high immune cell proportions. This is the same sample as the one with high microenvironment score from the xCell plot.
+
+```{r}
+quantiseq <- run_quantiseq(expression_data=exprs(hgnc_expset),
+              signature_matrix='TIL10',
+              is_arraydata=F,
+              is_tumordata=T,
+              scale_mRNA=T)
+colnames(quantiseq) <- colnames(quantiseq) %>%
+                        gsub('\\.', ' ', .)
+
+quantiplot(quantiseq[1:10,]) +
+  labs(title="QuanTIseq Deconvolution vs Samples (1-10)", fill="Cell Type", x="Sample", y="Composition") +
+  theme(axis.text.y=element_text(size=12)) + 
+  scale_x_discrete(labels=c("Kidney 2","Ovary 3","Ovary 2","Kidney 1","Ovary 1","Head/Neck 2","Head/Neck 1","Pancreas 3","Pancreas 2","Pancreas 1"))
+
+
+quantiplot(quantiseq[1:50,]) +
+  labs(title="QuanTIseq Deconvolution vs Samples (1-50)") +
+  theme(axis.text.y=element_text(size=6))
+quantiplot(quantiseq[51:100,]) + 
+  labs(title="QuanTIseq Deconvolution vs Samples (51-100)") +
+  theme(axis.text.y=element_text(size=6))
+quantiplot(quantiseq[101:142,]) +
+  labs(title="QuanTIseq Deconvolution vs Samples (101-142)") +
+  theme(axis.text.y=element_text(size=7))
+```
+
+```{r fig.height=4, fig.width=8}
+plotlist <- list()
+data <- data.frame(location=locations)
+for (i in colnames(quantiseq)[-1]) {
+  data$score <- quantiseq[,i]
+  plot <- ggplot(data, aes(x=location, y=score)) + 
+    geom_boxplot(outliers=F) + 
+    geom_jitter(size=1, height=0, aes(color=location)) +
+    theme_bw() +
+    theme(axis.text.x=element_text(angle=90, vjust=0.5, hjust=1)) +
+    labs(title=paste('QuanTIseq', i, 'Boxplot'),
+         color='Reduced Location',
+         x='Reduced Location',
+         y='QuanTIseq Score')
+  plotlist <- append(plotlist, list(plot))
+}
+
+marrangeGrob(plotlist, nrow=2, ncol=2) %>%
+  ggsave("../output/quanTIseq_boxplots.pdf", width=8.5, height=11, .)
+
+
+plotDistribution(bs, c("quantiseq$T.cells.CD8", "quantiseq$Macrophages.M2"), "reduced_location", NULL, "reduced_location", ncol=2) + labs(color="Location", x="Location", y="Composition")
+```
+
+### ssGSEA
+
+```{r}
+param <- ssgseaParam(hgnc_expset, gene_sets, minSize=10, maxSize=500)
+ssgsea <- gsva(param, verbose=T) %>%
+            exprs()
+rownames(ssgsea) <- ssgsea %>%
+                      rownames() %>%
+                      sub('bagaev_|bindea_|icr_|wolf_', '', .) %>%
+                      gsub('_|\\.', ' ', .)
+
+pheatmap(ssgsea,
+         labels_row=rownames(ssgsea),
+         annotation_col=ann,
+         annotation_colors=ann_colors,
+         clustering_method='ward.D2',
+         scale='none',
+         cluster_rows=T, 
+         cluster_cols=T,
+         show_colnames=F,
+         fontsize_row=6,
+         main='ssGSEA Scores vs Samples')
+```
+
+```{r}
+plotlist <- list()
+data <- data.frame(location=locations)
+for (i in 1:nrow(ssgsea)) {
+  data$score <- ssgsea[i,]
+  plot <- ggplot(data, aes(x=location, y=score)) + 
+    geom_boxplot(outliers=F) + 
+    geom_jitter(size=1, height=0, aes(color=location)) +
+    theme_bw() +
+    theme(axis.text.x=element_text(angle=90, vjust=0.5, hjust=1),
+          title=element_text(size=10)) +
+    labs(title=paste('ssGSEA', rownames(ssgsea)[i], 'Boxplot'),
+         color='Reduced Location',
+         x='Reduced Location',
+         y='ssGSEA Score')
+  plotlist <- append(plotlist, list(plot))
+}
+
+marrangeGrob(plotlist, nrow=2, ncol=2) %>%
+  ggsave("../output/ssGSEA_boxplots.pdf", width=8.5, height=11, .)
+```
+
+### xCell vs QuanTIseq
+
+```{r}
+plotlist <- list()
+comp_quantiseq <- data.frame(quantiseq[,'B cells'],
+                             quantiseq[,'Macrophages M1'] + quantiseq[,'Macrophages M2'],
+                             quantiseq[,'Monocytes'],
+                             quantiseq[,'Neutrophils'],
+                             quantiseq[,'NK cells'],
+                             quantiseq[,'T cells CD4'],
+                             quantiseq[,'T cells CD8'],
+                             quantiseq[,'Tregs'],
+                             quantiseq[,'Dendritic cells'])
+comp_xcell <- t(xcell[c('B-cells','Macrophages','Monocytes','Neutrophils','NK cells','CD4+ T-cells','CD8+ T-cells','Tregs','cDC'),])
+
+comp <- c('BCells','Macrophages','Monocytes','Neutrophils','NK cells','CD4TCells','CD8TCells','Tregs','DendriticCells')
+colnames(comp_quantiseq) <- comp
+colnames(comp_xcell) <- comp
+
+for (cell_type in comp) {
+  data <- data.frame(xcell=comp_xcell[,cell_type], 
+                     quantiseq=comp_quantiseq[,cell_type])
+  plot <- ggscatter(data, x='xcell', y='quantiseq', add='reg.line') + 
+    stat_cor() +
+    theme_bw() +
+    labs(title=paste('xCell vs quanTIseq', cell_type, 'Score'),
+         # color='Reduced Location',
+         x='xCell Score',
+         y='quanTIseq Score')
+  plotlist <- append(plotlist, list(plot))
+}
+
+marrangeGrob(plotlist, nrow=2, ncol=2) %>%
+ggsave("../output/xCell_quanTIseq_corr.pdf", width=8.5, height=11, .)
+```
+
+### QuanTIseq vs ssGSEA
+
+```{r}
+plotlist <- list()
+comps <- list(BCells=list(quantiseq[,'B cells'], ssgsea['B cells',]),
+             Macrophages=list(rowSums(quantiseq[,c('Macrophages M1', 'Macrophages M2')]), ssgsea['Macrophages',]),
+             Neutrophils=list(quantiseq[,'Neutrophils'], ssgsea['Neutrophils',]),
+             NKCells=list(quantiseq[,'NK cells'], ssgsea['NK cells',]),
+             CD4TCells=list(quantiseq[,'T cells CD4'], ssgsea['Thelper',]),
+             CD8TCells=list(quantiseq[,'T cells CD8'], ssgsea['CD8T',]),
+             CD4TvsICR=list(quantiseq[,'T cells CD4'], ssgsea['ICR SCORE',]),
+             CD8TvsICR=list(quantiseq[,'T cells CD8'], ssgsea['ICR SCORE',]),
+             TregvsFOXP3=list(quantiseq[,'Tregs'], exprs(hgnc_expset)['FOXP3',]))
+
+for (comp in names(comps)) {
+  data <- data.frame(x=comps[[comp]][[1]], y=comps[[comp]][[2]])
+  plot <- ggscatter(data, x='x', y='y', add='reg.line') + 
+    stat_cor() +
+    theme_bw() +
+    labs(title=paste('quanTIseq vs ssGSEA -', comp),
+         x='quanTIseq Score',
+         y='ssGSEA Score')
+  plotlist <- append(plotlist, list(plot))
+}
+
+marrangeGrob(plotlist, nrow=2, ncol=2) %>%
+ggsave("../output/quanTIseq_ssGSEA_corr.pdf", width=8.5, height=11, .)
+```
+
+### Data Output
+
+```{r}
+targets <- c('_____') %>%
+  sort()
+data <- cbind(exprs(hgnc_expset)[targets,] %>% t(),
+              quantiseq[-1],
+              t(ssgsea))
+write.csv(data, '../output/IO_tumor_explant_RNAseq_data.csv')
+```
+
+### Questions
+
+-   One Lung/Bronchus sample (\_\_\_\_\_) with very high amount of immune cells/high immune score (especially high B cell, CD8+ and CD4+ T cells, and hepathocytes)
+
+-   One sample (\_\_\_\_\_) is not FFPE. Include?
+
+-   One "Normal-Adj" sample (\_\_\_\_\_) and a few "Mets" samples
+
+-   1 or 2 samples (\_\_\_\_\_, \_\_\_\_\_) not cryopreserved?
+
+-   Difference between Colon/Rectum and Colon, Lung and Lung & Bronchus categories and if they can be combined

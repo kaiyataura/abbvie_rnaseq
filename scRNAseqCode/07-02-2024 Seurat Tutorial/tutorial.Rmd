@@ -1,0 +1,246 @@
+```{r}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(AUCell)
+library(GSVA)
+library(tidyverse)
+library(SingleCellExperiment)
+library(SingleR)
+```
+
+```{r}
+pbmc.data <- Read10X(data.dir="filtered_gene_bc_matrices/hg19/")
+pbmc <- CreateSeuratObject(counts=pbmc.data, 
+                           assay="RNA",
+                           project="pbmc3k", 
+                           min.cells=3, 
+                           min.features=200)
+pbmc
+```
+
+### QC
+
+\~900 unique genes (features) per cell. There are some outliers with \>3000 features, so these may (?) be from cell doublets from the sequencing. Number of counts per cell is \~2000 to 3000, and this also has some outliers (maybe from the same cells?) with very high counts. The mitochondrial gene percentage is low for most cells also except for a few outliers in the \>20% range, which may mean that the cell was dead.
+
+Not much correlation between number of counts and % mitochondrial counts, though the cells with high mitochondrial % have very low counts which is expected since they're probably dead so we would expect low counts from them.
+
+```{r}
+# % of all counts that are from mitochondrial genes for each cell
+pbmc$percent.mt <- PercentageFeatureSet(pbmc, 
+                                        pattern="^MT-") # genes that start with "MT-"
+                                                        # (mitochondrial genes)
+
+VlnPlot(pbmc, features=c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3)
+
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+
+# filter out cells with feature counts >2500 or <200 or >5% mitochondrial counts
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+```
+
+### Normalization
+
+```{r}
+# shift and scale so mean=0 and variance=1
+pbmc <- NormalizeData(pbmc, 
+                      normalization.method="LogNormalize", # Default
+                      scale.factor=10000) # Default
+```
+
+### Feature Selection
+
+```{r fig.width=10}
+pbmc <- FindVariableFeatures(pbmc, 
+                             selection.method="vst", 
+                             nfeatures=2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(pbmc), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(pbmc)
+plot2 <- LabelPoints(plot=plot1, 
+                     points=top10, 
+                     repel=TRUE)
+plot1 + plot2
+```
+
+### Scaling
+
+```{r}
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features=all.genes)
+```
+
+### PCA
+
+In PC1, we see that most of the top 30 correlated genes are positively correlated except for 1 gene (MATLAT1) that is negatively correlated. In PC2, there ar more negatively correlated genes than positively correlated ones. Analyzing the similarities of these genes may say something about what the PCs represent. When the PCs are graphed, there are 3-4 clusters formed.
+
+The elbow plot shows that the first 9 or 10 PCs account for most of the variation in the data, which can also be seen in the plots of the first 15 PCs and how the last few plots are very noisy compared to the first few.
+
+```{r}
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object=pbmc))
+
+print(pbmc$pca, dims=1:5, nfeatures=5)
+
+VizDimLoadings(pbmc, dims=1:2, reduction="pca")
+DimPlot(pbmc, reduction = "pca") + NoLegend()
+DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+DimHeatmap(pbmc, dims = 1:15, cells = 500, balanced = TRUE)
+ElbowPlot(pbmc)
+```
+
+### Clustering
+
+The clustering algorithm found 9 clusters, which can be seen in the UMAP plot, though this only as 4 visible clusters, were clusters 0, 2, 4, and 6 from the clustering algorithm combine into 1 group in the UMAP, and 1, 5, and 7 also do the same. Clusters 8 and 3 are more distinct.
+
+```{r}
+pbmc <- FindNeighbors(pbmc, dims=1:10) # takes in the first 10 PC dims
+pbmc <- FindClusters(pbmc, resolution=0.5) # higher res has more clusters
+
+pbmc <- RunUMAP(pbmc, dims = 1:10)
+DimPlot(pbmc, reduction = "umap", label = TRUE)
+```
+
+MS4A1 and CD79A are clear markers of cluster 3, and these are known markers for B cells, so cluster 3 represents the general B cells. Similarly, PF4 is unique to cluster 8 and this gene is a marker for platelets, so cluster 8 represents platelets. Looking at genes, we see that MS4A1 is expressed in cluster 3, GNLY in cluster 4/6, CD3E in 0/2, CD14 in 1, FCER1A in 7, FCGR3A in 5/6, LYZ in 1, PPBP in 8, and CD8A in 4.
+
+The heatmap shows different genes and their expression levels for different clusters and we can see clear differences in many of the clusters like cluster 1, 3, and 5. However clusters 0+2 and 4+6 seem similar to each other, so maybe there are other genes that aren't shown in the heatmap that allow them to be differentiated.
+
+```{r}
+# find all markers of cluster 2
+cluster2.markers <- FindMarkers(pbmc, ident.1 = 2)
+
+# find all markers distinguishing cluster 5 from clusters 0 and 3
+cluster5.markers <- FindMarkers(pbmc, ident.1 = 5, ident.2 = c(0, 3))
+
+# find markers for every cluster compared to all remaining cells, report only the positive ones
+pbmc.markers <- FindAllMarkers(pbmc, only.pos = TRUE)
+pbmc.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1)
+
+VlnPlot(pbmc, features = c("MS4A1", "CD79A"))
+
+VlnPlot(pbmc, features = c("NKG7", "PF4"), slot="counts", log=TRUE)
+
+FeaturePlot(pbmc, features=c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ", "PPBP", "CD8A"))
+
+pbmc.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 10) %>%
+    ungroup() -> top10
+DoHeatmap(pbmc, features = top10$gene) + NoLegend()
+```
+
+### Assigning Cell Type Identity to Clusters
+
+| Cluster ID | Markers       | Cell Type    |
+|:-----------|:--------------|:-------------|
+| 0          | IL7R, CCR7    | Naive CD4+ T |
+| 1          | CD14, LYZ     | CD14+ Mono   |
+| 2          | IL7R, S100A4  | Memory CD4+  |
+| 3          | MS4A1         | B            |
+| 4          | CD8A          | CD8+ T       |
+| 5          | FCGR3A, MS4A7 | FCGR3A+ Mono |
+| 6          | GNLY, NKG7    | NK           |
+| 7          | FCER1A, CST3  | DC           |
+| 8          | PPBP          | Platelet     |
+
+As expected from the previous plots, cluster 3 was the B cells and cluster 8 was the platelets.
+
+```{r}
+new.cluster.ids <- c("Naive CD4 T", "CD14+ Mono", "Memory CD4 T", "B", "CD8 T", "FCGR3A+ Mono", "NK", "DC", "Platelet")
+names(new.cluster.ids) <- levels(pbmc)
+pbmc <- RenameIdents(pbmc, new.cluster.ids)
+DimPlot(pbmc, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+```
+
+```{r}
+library(ggplot2)
+plot <- DimPlot(pbmc, reduction = "umap", label = TRUE, label.size = 4.5) + xlab("UMAP 1") + ylab("UMAP 2") +
+    theme(axis.title = element_text(size = 18), legend.text = element_text(size = 18)) + guides(colour = guide_legend(override.aes = list(size = 10)))
+print(plot)
+```
+
+```{r fig.height=10}
+features <- c("LYZ", "CCL5", "IL32", "PTPRCAP", "FCGR3A", "PF4")
+
+RidgePlot(pbmc, features = features, ncol = 2)
+VlnPlot(pbmc, features = features)
+FeaturePlot(pbmc, features = features)
+DotPlot(pbmc, features = features) + RotatedAxis()
+DoHeatmap(subset(pbmc, downsample = 100), features = features, size = 3)
+```
+
+### AUCell
+
+```{r}
+genesets <- readRDS("ioexplants_genesets.rds")
+genesets <- genesets[!names(genesets) %in% c("icr_ICR_SCORE", "wolf_IFNG_score_21050467", "proliferation")]
+
+cells_AUC <- AUCell_run(LayerData(pbmc), genesets)
+
+cells_assignment <- AUCell_exploreThresholds(cells_AUC, plotHist=TRUE, assign=TRUE) 
+```
+
+```{r fig.height=10, fig.width=20}
+cellsAssigned <- lapply(cells_assignment, function(x) x$assignment)
+assignmentTable <- reshape2::melt(cellsAssigned, value.name="cell")
+colnames(assignmentTable)[2] <- "geneSet"
+
+pbmc$aucell <- merge(colnames(pbmc), assignmentTable, all=T, by.x=1, by.y='cell')$geneSet
+DimPlot(pbmc, reduction="umap", group.by="aucell")
+```
+
+```{r fig.height=30, fig.width=20}
+pbmc <- AddMetaData(pbmc, as.data.frame(t(getAUC(cells_AUC))))
+FeaturePlot(pbmc, reduction="umap", features=rownames(cells_AUC))
+```
+
+```{r fig.height=30, fig.width=20}
+
+bulk_AUC <- AUCell_run(AggregateExpression(pbmc)$RNA, genesets)
+
+as.data.frame(Idents(pbmc))
+
+pbmc <- merge(data.frame(cell=names(Idents(pbmc)), ident=as.character(Idents(pbmc))), t(getAUC(bulk_AUC)), all=T, by.x=2, by.y="row.names") %>% 
+  column_to_rownames(var="cell") %>%
+  .[sort(rownames(.)),] %>%
+AddMetaData(pbmc, .)
+
+FeaturePlot(pbmc, reduction="umap", features=rownames(cells_AUC))
+```
+
+### SingleR
+
+```{r fig.height=10, fig.width=20}
+ref <- celldex::BlueprintEncodeData()
+
+data <- as.SingleCellExperiment(pbmc) # can also just use LayerData(pbmc)
+prediction.fine <- SingleR(test=data, ref=ref, de.method="wilcox", labels=ref$label.fine)
+
+pbmc$SingleR.label.fine <- prediction.fine$labels
+
+DimPlot(pbmc, reduction="umap", group.by="SingleR.label.fine")
+plotScoreHeatmap(prediction.fine)
+plotDeltaDistribution(prediction.fine, ncol=8, dots.on.top=FALSE)
+
+# new.cluster.ids <- table(assigned=prediction$pruned.labels, cluster=pbmc$seurat_clusters) %>%
+#   apply(., 2, function(x) rownames(.)[which.max(x)])
+
+new.cluster.ids <- table(assigned=prediction$pruned.labels, cluster=pbmc$seurat_clusters) %>% as.matrix() %>%
+  apply(., 1, function(x) x / table(pbmc$seurat_clusters)) %>% 
+  t() %>%
+  apply(., 2, function(x) rownames(.)[order(x, decreasing=T)[sort(x, decreasing=T) > 0.3]]) %>%
+  lapply(., function(x) paste(x, collapse=" + ")) %>%
+  as.character()
+pbmc$SingleR <- data.frame(new.cluster.ids[pbmc$seurat_clusters], row.names=colnames(pbmc))
+
+DimPlot(pbmc, reduction = "umap", label = TRUE, pt.size = 0.5, group.by='SingleR') + NoLegend()
+
+
+```
